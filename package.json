@@ -1,0 +1,21 @@
+{
+  "name": "myhomegames-importer",
+  "version": "1.0.0",
+  "description": "Import games and collections from GOG Galaxy to MyHomeGames",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node cli.js",
+    "import": "node cli.js"
+  },
+  "bin": {
+    "myhomegames-importer": "./cli.js"
+  },
+  "keywords": ["gog", "galaxy", "importer", "myhomegames"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "dotenv": "^16.4.5"
+  }
+}
