@@ -167,12 +167,20 @@ function importCollections(metadataPath, gameReleaseKeyMap, tagsData) {
     
     // Map releaseKeys to game IDs (convert to numbers as MyHomeGames uses numeric IDs)
     const gameIds = [];
+    let missingGameCount = 0;
     for (const releaseKey of releaseKeys) {
       const gameId = gameReleaseKeyMap.get(releaseKey);
       if (gameId) {
         // MyHomeGames uses numeric IDs for games in collections
         gameIds.push(typeof gameId === 'number' ? gameId : parseInt(gameId, 10));
+      } else {
+        missingGameCount++;
+        console.warn(`    Warning: No IGDB game ID found for releaseKey: ${releaseKey} (game may not have been imported)`);
       }
+    }
+    
+    if (missingGameCount > 0) {
+      console.log(`    Note: ${missingGameCount} game(s) from this collection were not imported (skipped)`);
     }
     
     collectionMetadata.games = gameIds;
