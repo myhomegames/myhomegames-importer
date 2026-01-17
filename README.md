@@ -129,7 +129,9 @@ myhomegames-importer/
 ### How it works
 
 1. **Games Import:**
-   - Queries `GamePieces` table for game titles (`key = 'title'`)
+   - Queries `GamePieces` table and extracts game titles from the JSON `value` field (`json_extract(value, '$.title')`)
+   - Links to `PlayTasks` table via `releaseKey` to get `playTaskId`
+   - Links to `PlayTaskLaunchParameters` via `playTaskId` to get executable paths
    - For each game, searches IGDB to get the correct game ID
    - Creates game directory in MyHomeGames format: `content/games/{igdb_id}/`
    - Copies executable script from `PlayTaskLaunchParameters.executablePath` to `script.sh` or `script.bat`
@@ -145,8 +147,9 @@ myhomegames-importer/
 
 The GOG Galaxy importer queries the following database tables:
 
-- `GamePieces`: Contains game information (title, releaseKey)
-- `PlayTaskLaunchParameters`: Contains executable paths for games
+- `GamePieces`: Contains game information with `value` field as JSON (extracts `title` from JSON) and `releaseKey`
+- `PlayTasks`: Links `gameReleaseKey` to `id` (playTaskId)
+- `PlayTaskLaunchParameters`: Contains executable paths (`executablePath`) linked via `playTaskId` (references `PlayTasks.id`)
 - `UserReleaseTags`: Contains user-defined tags/collections
 
 ### Notes

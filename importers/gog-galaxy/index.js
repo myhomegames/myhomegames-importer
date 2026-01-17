@@ -230,19 +230,23 @@ export async function importFromGOGGalaxy(config) {
   
   try {
     // Get all games from GamePieces
-    // GamePieces stores game metadata as key-value pairs
+    // GamePieces.value is a JSON object containing the title
+    // PlayTasks links releaseKey to playTaskId
+    // PlayTaskLaunchParameters contains executablePath linked via playTaskId
     console.log('\n=== Querying Games ===');
     const gamesQuery = db.prepare(`
       SELECT 
         gp.releaseKey,
-        MAX(CASE WHEN gp.key = 'title' THEN gp.value END) as title,
+        json_extract(gp.value, '$.title') as title,
         ptlp.executablePath
       FROM GamePieces gp
-      LEFT JOIN PlayTaskLaunchParameters ptlp ON gp.releaseKey = ptlp.releaseKey
-      WHERE gp.key = 'title' 
-        AND gp.value IS NOT NULL 
+      LEFT JOIN PlayTasks pt ON gp.releaseKey = pt.gameReleaseKey
+      LEFT JOIN PlayTaskLaunchParameters ptlp ON pt.id = ptlp.playTaskId
+      WHERE gp.value IS NOT NULL 
         AND gp.value != ''
         AND gp.releaseKey IS NOT NULL
+        AND json_extract(gp.value, '$.title') IS NOT NULL
+        AND json_extract(gp.value, '$.title') != ''
       GROUP BY gp.releaseKey, ptlp.executablePath
       ORDER BY title
       ${limit ? `LIMIT ${limit}` : ''}
