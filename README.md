@@ -36,6 +36,14 @@ npm start gog-galaxy --metadata-path /path/to/metadata
 
 ### Environment Variables
 
+You can configure the importer using environment variables in three ways:
+
+1. **Using a `.env` file** (recommended) - Create a `.env` file in the project root
+2. **Command-line environment variables** - Set variables when running the command
+3. **Command-line options** - Use `--option value` flags
+
+**Priority order:** Command-line options > Environment variables > `.env` file > Defaults
+
 Common variables (apply to all importers):
 
 - `METADATA_PATH` - Path to MyHomeGames metadata directory (required)
@@ -48,9 +56,33 @@ GOG Galaxy specific variables:
 - `TWITCH_CLIENT_SECRET` - Twitch Client Secret for IGDB API (required)
 - `LIMIT` - Limit number of games to import (optional, for testing)
 
+#### Using .env File
+
+The easiest way to configure the importer is to create a `.env` file in the project root:
+
+```bash
+# Copy the example file
+cp .env.example .env
+
+# Edit .env with your values
+nano .env
+```
+
+Then simply run:
+
+```bash
+node cli.js gog-galaxy
+```
+
+The importer will automatically load variables from the `.env` file. See `.env.example` for a template.
+
 ### Examples
 
 ```bash
+# Using .env file (recommended)
+# Create .env file with your configuration, then:
+node cli.js gog-galaxy
+
 # GOG Galaxy importer with environment variables
 METADATA_PATH=/path/to/metadata \
 TWITCH_CLIENT_ID=xxx \
@@ -71,13 +103,17 @@ METADATA_PATH=/path/to/metadata \
 TWITCH_CLIENT_ID=xxx \
 TWITCH_CLIENT_SECRET=xxx \
 node cli.js gog-galaxy
+
+# Override .env values with command-line options
+node cli.js gog-galaxy --limit 5 --metadata-path /custom/path
 ```
 
 ## Project Structure
 
-```
+```text
 myhomegames-importer/
 ├── cli.js                      # Main CLI entry point
+├── .env.example                # Example environment variables file
 ├── importers/
 │   ├── common/                 # Shared utilities
 │   │   ├── igdb.js            # IGDB API utilities

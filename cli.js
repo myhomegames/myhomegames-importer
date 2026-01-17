@@ -5,7 +5,11 @@
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
 import { importFromGOGGalaxy } from './importers/gog-galaxy/index.js';
+
+// Load .env file if it exists
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
