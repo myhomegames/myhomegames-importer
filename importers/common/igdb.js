@@ -34,6 +34,11 @@ export async function searchGameOnServer(title, serverUrl, apiToken, twitchClien
           'Content-Type': 'application/json',
         },
       };
+      
+      // Accept self-signed certificates for HTTPS (for development)
+      if (isHttps) {
+        options.rejectUnauthorized = false;
+      }
 
       const req = httpModule.request(options, (res) => {
         let data = '';
