@@ -4,8 +4,7 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
-import { searchGameOnServer, getGameDetailsFromServer } from '../common/igdb.js';
-import { ensureDirectoryExists, copyFile, writeJsonFile } from '../common/files.js';
+import { searchGameOnServer, getGameDetailsFromServer, createGameViaAPI, uploadExecutableViaAPI, uploadCoverViaAPI, uploadBackgroundViaAPI, createCollectionViaAPI, updateCollectionGamesViaAPI, getCollectionsViaAPI } from '../common/igdb.js';
 
 /**
  * Sanitize executable name for filesystem (same logic as server)
@@ -49,16 +48,54 @@ async function importGame(gameTitle, releaseKey, executables, metadataPath, gala
     console.warn(`  Warning: Failed to fetch full game details: ${error.message}`);
   }
   
-  // Create game directory
-  const gameDir = path.join(metadataPath, 'content', 'games', String(gameId));
-  ensureDirectoryExists(gameDir);
+  // Prepare game data for API
+  const releaseDate = fullGameData?.releaseDate || null;
+  const gameData = {
+    igdbId: gameId,
+    name: fullGameData?.name || igdbGame.name,
+    summary: fullGameData?.summary || '',
+    cover: fullGameData?.cover || null,
+    background: fullGameData?.background || null,
+    releaseDate: releaseDate,
+    genres: fullGameData?.genres || null,
+    criticRating: fullGameData?.criticRating !== null && fullGameData?.criticRating !== undefined ? fullGameData.criticRating : null,
+    userRating: fullGameData?.userRating !== null && fullGameData?.userRating !== undefined ? fullGameData.userRating : null,
+    themes: fullGameData?.themes || null,
+    platforms: fullGameData?.platforms || null,
+    gameModes: fullGameData?.gameModes || null,
+    playerPerspectives: fullGameData?.playerPerspectives || null,
+    websites: fullGameData?.websites || null,
+    ageRatings: fullGameData?.ageRatings || null,
+    developers: fullGameData?.developers || null,
+    publishers: fullGameData?.publishers || null,
+    franchise: fullGameData?.franchise || null,
+    collection: fullGameData?.collection || null,
+    screenshots: fullGameData?.screenshots || null,
+    videos: fullGameData?.videos || null,
+    gameEngines: fullGameData?.gameEngines || null,
+    keywords: fullGameData?.keywords || null,
+    alternativeNames: fullGameData?.alternativeNames || null,
+    similarGames: fullGameData?.similarGames || null,
+  };
   
-  // Process all executables
-  const executableLabels = [];
-  const usedFileNames = new Set(); // Track used filenames to avoid collisions
+  // Create game via API
+  console.log(`  Creating game via API...`);
+  try {
+    await createGameViaAPI(gameData, serverUrl, apiToken);
+    console.log(`  Created game via API`);
+  } catch (error) {
+    // If game already exists (409), that's fine, continue
+    if (error.message.includes('409') || error.message.includes('already exists')) {
+      console.log(`  Game already exists, skipping creation`);
+    } else {
+      throw error;
+    }
+  }
   
+  // Upload executables via API
+  let executableCount = 0;
   for (const exec of executables) {
-    if (!exec.path) continue;
+    if (!exec.path || !fs.existsSync(exec.path)) continue;
     
     // Clean label: remove .sh or .bat extension if present
     let label = exec.label || 'script';
@@ -68,141 +105,18 @@ async function importGame(gameTitle, releaseKey, executables, metadataPath, gala
       label = label.slice(0, -3); // Remove last 3 characters (.sh)
     }
     
-    let executableName = sanitizeExecutableName(label);
-    
-    // Determine script extension based on original file
-    const ext = path.extname(exec.path).toLowerCase();
-    const scriptExtension = ext === '.bat' ? '.bat' : '.sh';
-    
-    // Handle filename collisions: if sanitized name already used, add a number
-    let scriptName = `${executableName}${scriptExtension}`;
-    let counter = 1;
-    while (usedFileNames.has(scriptName)) {
-      scriptName = `${executableName}_${counter}${scriptExtension}`;
-      counter++;
-    }
-    usedFileNames.add(scriptName);
-    
-    const scriptPath = path.join(gameDir, scriptName);
-    
-    if (copyFile(exec.path, scriptPath)) {
-      // Make script executable (Unix-like systems, only for .sh)
-      if (scriptExtension === '.sh') {
-        try {
-          fs.chmodSync(scriptPath, 0o755);
-        } catch (e) {
-          // Ignore chmod errors on Windows
-        }
-      }
-      console.log(`  Copied script: ${scriptName} (label: ${label})`);
-      // Use the original label (not sanitized) in the metadata
-      executableLabels.push(label);
+    try {
+      await uploadExecutableViaAPI(gameId, exec.path, label, serverUrl, apiToken);
+      console.log(`  Uploaded executable: ${path.basename(exec.path)} (label: ${label})`);
+      executableCount++;
+    } catch (error) {
+      console.warn(`  Warning: Failed to upload executable ${exec.path}: ${error.message}`);
     }
   }
   
-  // Create metadata.json with all available fields from IGDB
-  const gameMetadataPath = path.join(gameDir, 'metadata.json');
-  const gameMetadata = {
-    title: fullGameData?.name || igdbGame.name,
-    summary: fullGameData?.summary || '',
-    year: fullGameData?.releaseDateFull?.year || fullGameData?.releaseDate || null,
-    month: fullGameData?.releaseDateFull?.month || null,
-    day: fullGameData?.releaseDateFull?.day || null,
-    stars: null, // Not available from IGDB
-    genre: fullGameData?.genres && fullGameData.genres.length > 0 ? fullGameData.genres : null,
-  };
+  console.log(`  Uploaded ${executableCount} executable(s)`);
   
-  // Add IGDB cover and background URLs if available
-  if (fullGameData?.cover) {
-    gameMetadata.igdbCover = fullGameData.cover;
-  }
-  
-  if (fullGameData?.background) {
-    gameMetadata.igdbBackground = fullGameData.background;
-  }
-  
-  // Add optional fields if available
-  if (fullGameData?.criticRating !== null && fullGameData?.criticRating !== undefined) {
-    gameMetadata.criticratings = fullGameData.criticRating / 10; // Convert from 0-100 to 0-10 scale
-  }
-  
-  if (fullGameData?.userRating !== null && fullGameData?.userRating !== undefined) {
-    gameMetadata.userratings = fullGameData.userRating / 10; // Convert from 0-100 to 0-10 scale
-  }
-  
-  if (fullGameData?.themes && fullGameData.themes.length > 0) {
-    gameMetadata.themes = fullGameData.themes;
-  }
-  
-  if (fullGameData?.platforms && fullGameData.platforms.length > 0) {
-    gameMetadata.platforms = fullGameData.platforms;
-  }
-  
-  if (fullGameData?.gameModes && fullGameData.gameModes.length > 0) {
-    gameMetadata.gameModes = fullGameData.gameModes;
-  }
-  
-  if (fullGameData?.playerPerspectives && fullGameData.playerPerspectives.length > 0) {
-    gameMetadata.playerPerspectives = fullGameData.playerPerspectives;
-  }
-  
-  if (fullGameData?.websites && fullGameData.websites.length > 0) {
-    gameMetadata.websites = fullGameData.websites;
-  }
-  
-  if (fullGameData?.ageRatings && fullGameData.ageRatings.length > 0) {
-    gameMetadata.ageRatings = fullGameData.ageRatings;
-  }
-  
-  if (fullGameData?.developers && fullGameData.developers.length > 0) {
-    gameMetadata.developers = fullGameData.developers;
-  }
-  
-  if (fullGameData?.publishers && fullGameData.publishers.length > 0) {
-    gameMetadata.publishers = fullGameData.publishers;
-  }
-  
-  if (fullGameData?.franchise) {
-    gameMetadata.franchise = fullGameData.franchise;
-  }
-  
-  if (fullGameData?.collection) {
-    gameMetadata.collection = fullGameData.collection;
-  }
-  
-  if (fullGameData?.screenshots && fullGameData.screenshots.length > 0) {
-    gameMetadata.screenshots = fullGameData.screenshots;
-  }
-  
-  if (fullGameData?.videos && fullGameData.videos.length > 0) {
-    gameMetadata.videos = fullGameData.videos;
-  }
-  
-  if (fullGameData?.gameEngines && fullGameData.gameEngines.length > 0) {
-    gameMetadata.gameEngines = fullGameData.gameEngines;
-  }
-  
-  if (fullGameData?.keywords && fullGameData.keywords.length > 0) {
-    gameMetadata.keywords = fullGameData.keywords;
-  }
-  
-  if (fullGameData?.alternativeNames && fullGameData.alternativeNames.length > 0) {
-    gameMetadata.alternativeNames = fullGameData.alternativeNames;
-  }
-  
-  if (fullGameData?.similarGames && fullGameData.similarGames.length > 0) {
-    gameMetadata.similarGames = fullGameData.similarGames;
-  }
-  
-  // Add executables array if we have executables
-  if (executableLabels.length > 0) {
-    gameMetadata.executables = executableLabels;
-  }
-  
-  writeJsonFile(gameMetadataPath, gameMetadata);
-  console.log(`  Created metadata.json with ${executableLabels.length} executable(s)`);
-  
-  // Copy images from GOG Galaxy
+  // Upload images from GOG Galaxy via API
   if (releaseKey) {
     // Look for cover image
     const coverPatterns = [
@@ -214,11 +128,12 @@ async function importGame(gameTitle, releaseKey, executables, metadataPath, gala
     
     for (const coverPath of coverPatterns) {
       if (fs.existsSync(coverPath)) {
-        const destCoverPath = path.join(gameDir, 'cover.webp');
-        // Note: We copy as .webp, but the file might be .jpg or .png
-        // You might want to convert it to webp using a library like sharp
-        copyFile(coverPath, destCoverPath);
-        console.log(`  Copied cover: ${path.basename(coverPath)}`);
+        try {
+          await uploadCoverViaAPI(gameId, coverPath, serverUrl, apiToken);
+          console.log(`  Uploaded cover: ${path.basename(coverPath)}`);
+        } catch (error) {
+          console.warn(`  Warning: Failed to upload cover: ${error.message}`);
+        }
         break;
       }
     }
@@ -233,9 +148,12 @@ async function importGame(gameTitle, releaseKey, executables, metadataPath, gala
     
     for (const bgPath of backgroundPatterns) {
       if (fs.existsSync(bgPath)) {
-        const destBgPath = path.join(gameDir, 'background.webp');
-        copyFile(bgPath, destBgPath);
-        console.log(`  Copied background: ${path.basename(bgPath)}`);
+        try {
+          await uploadBackgroundViaAPI(gameId, bgPath, serverUrl, apiToken);
+          console.log(`  Uploaded background: ${path.basename(bgPath)}`);
+        } catch (error) {
+          console.warn(`  Warning: Failed to upload background: ${error.message}`);
+        }
         break;
       }
     }
@@ -245,35 +163,23 @@ async function importGame(gameTitle, releaseKey, executables, metadataPath, gala
 }
 
 /**
- * Import collections (tags)
- * Note: This function now searches for games by IGDB ID in the filesystem,
- * not by releaseKey, since the collection should reference games by their IGDB ID.
+ * Import collections (tags) via API
+ * Note: This function uses gameReleaseKeyMap to map releaseKey to IGDB game IDs.
  */
-function importCollections(metadataPath, gameReleaseKeyMap, tagsData, gamesByReleaseKey) {
+async function importCollections(metadataPath, gameReleaseKeyMap, tagsData, gamesByReleaseKey, serverUrl, apiToken) {
   console.log('\n=== Importing Collections ===');
   
-  // Load existing collections to avoid duplicates
-  const collectionsDir = path.join(metadataPath, 'content', 'collections');
-  ensureDirectoryExists(collectionsDir);
-  
+  // Get existing collections via API
   const existingCollections = new Set();
-  if (fs.existsSync(collectionsDir)) {
-    const dirs = fs.readdirSync(collectionsDir, { withFileTypes: true });
-    for (const dir of dirs) {
-      if (dir.isDirectory()) {
-        const metadataPath = path.join(collectionsDir, dir.name, 'metadata.json');
-        if (fs.existsSync(metadataPath)) {
-          try {
-            const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf-8'));
-            if (metadata.title) {
-              existingCollections.add(metadata.title.toLowerCase());
-            }
-          } catch (e) {
-            // Ignore invalid JSON
-          }
-        }
+  try {
+    const collections = await getCollectionsViaAPI(serverUrl, apiToken);
+    for (const collection of collections) {
+      if (collection.title) {
+        existingCollections.add(collection.title.toLowerCase());
       }
     }
+  } catch (error) {
+    console.warn(`  Warning: Failed to get existing collections: ${error.message}`);
   }
   
   // Group games by tag
@@ -293,83 +199,82 @@ function importCollections(metadataPath, gameReleaseKeyMap, tagsData, gamesByRel
       continue;
     }
     
-    // Create collection with numeric ID (timestamp)
-    const collectionId = Date.now() + importedCount;
-    const collectionDir = path.join(collectionsDir, String(collectionId));
-    ensureDirectoryExists(collectionDir);
-    
-    // Create metadata.json
-    const collectionMetadataPath = path.join(collectionDir, 'metadata.json');
-    const collectionMetadata = {
-      title: tag,
-      summary: '',
-      games: [], // Will be populated with game IDs from releaseKeys
-    };
-    
-    // Map releaseKeys to game IDs by looking up in gamesByReleaseKey map
-    // and then finding the corresponding IGDB ID in the filesystem by title
+    // Map releaseKeys to game IDs using gameReleaseKeyMap (games imported in this session)
     const gameIds = [];
     let missingGameCount = 0;
     
-    // First, build a map of title -> gameId from the filesystem
-    const gamesDir = path.join(metadataPath, 'content', 'games');
-    const titleToGameIdMap = new Map();
-    if (fs.existsSync(gamesDir)) {
-      const gameDirs = fs.readdirSync(gamesDir, { withFileTypes: true });
-      for (const gameDir of gameDirs) {
-        if (gameDir.isDirectory()) {
-          const gameMetadataPath = path.join(gamesDir, gameDir.name, 'metadata.json');
-          if (fs.existsSync(gameMetadataPath)) {
-            try {
-              const gameMetadata = JSON.parse(fs.readFileSync(gameMetadataPath, 'utf-8'));
-              if (gameMetadata.title) {
-                const normalizedTitle = gameMetadata.title.toLowerCase().trim();
-                // The directory name is the IGDB ID
-                const gameId = parseInt(gameDir.name, 10);
-                if (!isNaN(gameId)) {
-                  titleToGameIdMap.set(normalizedTitle, gameId);
+    for (const releaseKey of releaseKeys) {
+      // Try to get from gameReleaseKeyMap first (for games imported in this session)
+      const gameId = gameReleaseKeyMap.get(releaseKey);
+      if (gameId) {
+        gameIds.push(typeof gameId === 'number' ? gameId : parseInt(gameId, 10));
+      } else {
+        // If not found in gameReleaseKeyMap, try to find by title in filesystem as fallback
+        // (for games imported in previous sessions)
+        const gameData = gamesByReleaseKey.get(releaseKey);
+        if (gameData && gameData.title) {
+          // Try to find game ID by reading from filesystem (fallback for games not imported in this session)
+          const gamesDir = path.join(metadataPath, 'content', 'games');
+          if (fs.existsSync(gamesDir)) {
+            let found = false;
+            const normalizedTitle = gameData.title.toLowerCase().trim();
+            const gameDirs = fs.readdirSync(gamesDir, { withFileTypes: true });
+            for (const gameDir of gameDirs) {
+              if (gameDir.isDirectory()) {
+                const gameMetadataPath = path.join(gamesDir, gameDir.name, 'metadata.json');
+                if (fs.existsSync(gameMetadataPath)) {
+                  try {
+                    const gameMetadata = JSON.parse(fs.readFileSync(gameMetadataPath, 'utf-8'));
+                    if (gameMetadata.title && gameMetadata.title.toLowerCase().trim() === normalizedTitle) {
+                      const fsGameId = parseInt(gameDir.name, 10);
+                      if (!isNaN(fsGameId)) {
+                        gameIds.push(fsGameId);
+                        found = true;
+                        break;
+                      }
+                    }
+                  } catch (e) {
+                    // Ignore invalid JSON
+                  }
                 }
               }
-            } catch (e) {
-              // Ignore invalid JSON
             }
-          }
-        }
-      }
-    }
-    
-    // Now map releaseKeys to game IDs using title lookup
-    for (const releaseKey of releaseKeys) {
-      // Get game title from gamesByReleaseKey
-      const gameData = gamesByReleaseKey.get(releaseKey);
-      if (gameData && gameData.title) {
-        const normalizedTitle = gameData.title.toLowerCase().trim();
-        const gameId = titleToGameIdMap.get(normalizedTitle);
-        if (gameId) {
-          gameIds.push(gameId);
-        } else {
-          // Try to get from gameReleaseKeyMap as fallback (for games imported in this session)
-          const fallbackGameId = gameReleaseKeyMap.get(releaseKey);
-          if (fallbackGameId) {
-            gameIds.push(typeof fallbackGameId === 'number' ? fallbackGameId : parseInt(fallbackGameId, 10));
+            if (!found) {
+              missingGameCount++;
+            }
           } else {
             missingGameCount++;
           }
+        } else {
+          missingGameCount++;
         }
-      } else {
-        missingGameCount++;
       }
     }
     
     if (missingGameCount > 0) {
-      console.log(`    Note: ${missingGameCount} game(s) from this collection were not imported (skipped)`);
+      console.log(`    Note: ${missingGameCount} game(s) from this collection were not found (skipped)`);
     }
     
-    collectionMetadata.games = gameIds;
-    writeJsonFile(collectionMetadataPath, collectionMetadata);
-    
-    console.log(`  Created collection: ${tag} (ID: ${collectionId}, ${gameIds.length} games)`);
-    importedCount++;
+    // Create collection via API
+    try {
+      const response = await createCollectionViaAPI(tag, '', serverUrl, apiToken);
+      const collectionId = response.collection?.id;
+      
+      if (collectionId && gameIds.length > 0) {
+        // Update collection games via API
+        await updateCollectionGamesViaAPI(collectionId, gameIds, serverUrl, apiToken);
+      }
+      
+      console.log(`  Created collection: ${tag} (ID: ${collectionId}, ${gameIds.length} games)`);
+      importedCount++;
+    } catch (error) {
+      // If collection already exists (409), that's fine, skip it
+      if (error.message.includes('409') || error.message.includes('already exists')) {
+        console.log(`  Skipping existing collection: ${tag}`);
+      } else {
+        console.warn(`  Warning: Failed to create collection ${tag}: ${error.message}`);
+      }
+    }
   }
   
   console.log(`\nImported ${importedCount} collections`);
@@ -578,7 +483,7 @@ export async function importFromGOGGalaxy(config) {
         
         // Import collections
         if ((gameReleaseKeyMap.size > 0 || gamesByReleaseKey.size > 0) && tagsData.length > 0) {
-          importCollections(metadataPath, gameReleaseKeyMap, tagsData, gamesByReleaseKey);
+          await importCollections(metadataPath, gameReleaseKeyMap, tagsData, gamesByReleaseKey, serverUrl, apiToken);
         }
       } else {
         console.log('\n=== Skipping Collections (--games-only mode) ===');
@@ -652,7 +557,7 @@ export async function importFromGOGGalaxy(config) {
       
       // Import collections
       if (gamesByReleaseKey.size > 0 && tagsData.length > 0) {
-        importCollections(metadataPath, new Map(), tagsData, gamesByReleaseKey);
+        await importCollections(metadataPath, new Map(), tagsData, gamesByReleaseKey, serverUrl, apiToken);
       }
     }
     

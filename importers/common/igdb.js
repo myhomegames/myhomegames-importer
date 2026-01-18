@@ -3,6 +3,8 @@
 import https from 'https';
 import http from 'http';
 import { URL } from 'url';
+import FormData from 'form-data';
+import fs from 'fs';
 
 /**
  * Get full game details from MyHomeGames server
@@ -145,4 +147,241 @@ export async function searchGameOnServer(title, serverUrl, apiToken, twitchClien
       reject(new Error(`Invalid server URL: ${e.message}`));
     }
   });
+}
+
+/**
+ * Make HTTP request (JSON body)
+ * @param {string} method - HTTP method (GET, POST, PUT, etc.)
+ * @param {string} urlString - Full URL
+ * @param {string} apiToken - API token for authentication
+ * @param {Object} body - JSON body (optional)
+ * @returns {Promise<Object>} - Response body as JSON
+ */
+function makeHttpRequest(method, urlString, apiToken, body = null) {
+  return new Promise((resolve, reject) => {
+    try {
+      const url = new URL(urlString);
+      const isHttps = url.protocol === 'https:';
+      const httpModule = isHttps ? https : http;
+
+      const options = {
+        hostname: url.hostname,
+        port: url.port || (isHttps ? 443 : 80),
+        path: url.pathname + url.search,
+        method: method,
+        headers: {
+          'X-Auth-Token': apiToken,
+          'Content-Type': 'application/json',
+        },
+      };
+      
+      // Accept self-signed certificates for HTTPS (for development)
+      if (isHttps) {
+        options.rejectUnauthorized = false;
+      }
+
+      const req = httpModule.request(options, (res) => {
+        let data = '';
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        res.on('end', () => {
+          try {
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+              const error = data ? JSON.parse(data) : { error: res.statusMessage };
+              reject(new Error(`Server error (${res.statusCode}): ${error.error || res.statusMessage}`));
+              return;
+            }
+
+            const responseData = data ? JSON.parse(data) : {};
+            resolve(responseData);
+          } catch (e) {
+            reject(new Error(`Failed to parse server response: ${e.message}`));
+          }
+        });
+      });
+
+      req.on('error', (err) => {
+        reject(new Error(`Request failed: ${err.message}`));
+      });
+
+      if (body) {
+        req.write(JSON.stringify(body));
+      }
+
+      req.end();
+    } catch (e) {
+      reject(new Error(`Invalid server URL: ${e.message}`));
+    }
+  });
+}
+
+/**
+ * Make HTTP request with multipart/form-data (for file uploads)
+ * @param {string} method - HTTP method (POST, PUT, etc.)
+ * @param {string} urlString - Full URL
+ * @param {string} apiToken - API token for authentication
+ * @param {Object} formDataFields - Object with form fields (e.g., { file: fs.createReadStream(...), label: '...' })
+ * @returns {Promise<Object>} - Response body as JSON
+ */
+function makeMultipartRequest(method, urlString, apiToken, formDataFields) {
+  return new Promise((resolve, reject) => {
+    try {
+      const url = new URL(urlString);
+      const isHttps = url.protocol === 'https:';
+      const httpModule = isHttps ? https : http;
+
+      const form = new FormData();
+      for (const [key, value] of Object.entries(formDataFields)) {
+        form.append(key, value);
+      }
+
+      const options = {
+        hostname: url.hostname,
+        port: url.port || (isHttps ? 443 : 80),
+        path: url.pathname + url.search,
+        method: method,
+        headers: {
+          'X-Auth-Token': apiToken,
+          ...form.getHeaders(),
+        },
+      };
+      
+      // Accept self-signed certificates for HTTPS (for development)
+      if (isHttps) {
+        options.rejectUnauthorized = false;
+      }
+
+      const req = httpModule.request(options, (res) => {
+        let data = '';
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        res.on('end', () => {
+          try {
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+              const error = data ? JSON.parse(data) : { error: res.statusMessage };
+              reject(new Error(`Server error (${res.statusCode}): ${error.error || res.statusMessage}`));
+              return;
+            }
+
+            const responseData = data ? JSON.parse(data) : {};
+            resolve(responseData);
+          } catch (e) {
+            reject(new Error(`Failed to parse server response: ${e.message}`));
+          }
+        });
+      });
+
+      req.on('error', (err) => {
+        reject(new Error(`Request failed: ${err.message}`));
+      });
+
+      form.pipe(req);
+    } catch (e) {
+      reject(new Error(`Invalid server URL: ${e.message}`));
+    }
+  });
+}
+
+/**
+ * Create game via API
+ * @param {Object} gameData - Game data for POST /games/add-from-igdb
+ * @param {string} serverUrl - MyHomeGames server URL
+ * @param {string} apiToken - API token
+ * @returns {Promise<Object>} - Created game data
+ */
+export async function createGameViaAPI(gameData, serverUrl, apiToken) {
+  const url = `${serverUrl}/games/add-from-igdb`;
+  return makeHttpRequest('POST', url, apiToken, gameData);
+}
+
+/**
+ * Upload executable file via API
+ * @param {number} gameId - Game ID
+ * @param {string} filePath - Path to executable file
+ * @param {string} label - Executable label (optional)
+ * @param {string} serverUrl - MyHomeGames server URL
+ * @param {string} apiToken - API token
+ * @returns {Promise<Object>} - Response data
+ */
+export async function uploadExecutableViaAPI(gameId, filePath, label, serverUrl, apiToken) {
+  const url = `${serverUrl}/games/${gameId}/upload-executable`;
+  const formDataFields = {
+    file: fs.createReadStream(filePath),
+  };
+  if (label) {
+    formDataFields.label = label;
+  }
+  return makeMultipartRequest('POST', url, apiToken, formDataFields);
+}
+
+/**
+ * Upload cover image via API
+ * @param {number} gameId - Game ID
+ * @param {string} filePath - Path to cover image file
+ * @param {string} serverUrl - MyHomeGames server URL
+ * @param {string} apiToken - API token
+ * @returns {Promise<Object>} - Response data
+ */
+export async function uploadCoverViaAPI(gameId, filePath, serverUrl, apiToken) {
+  const url = `${serverUrl}/games/${gameId}/upload-cover`;
+  const formDataFields = {
+    file: fs.createReadStream(filePath),
+  };
+  return makeMultipartRequest('POST', url, apiToken, formDataFields);
+}
+
+/**
+ * Upload background image via API
+ * @param {number} gameId - Game ID
+ * @param {string} filePath - Path to background image file
+ * @param {string} serverUrl - MyHomeGames server URL
+ * @param {string} apiToken - API token
+ * @returns {Promise<Object>} - Response data
+ */
+export async function uploadBackgroundViaAPI(gameId, filePath, serverUrl, apiToken) {
+  const url = `${serverUrl}/games/${gameId}/upload-background`;
+  const formDataFields = {
+    file: fs.createReadStream(filePath),
+  };
+  return makeMultipartRequest('POST', url, apiToken, formDataFields);
+}
+
+/**
+ * Create collection via API
+ * @param {string} title - Collection title
+ * @param {string} summary - Collection summary (optional)
+ * @param {string} serverUrl - MyHomeGames server URL
+ * @param {string} apiToken - API token
+ * @returns {Promise<Object>} - Created collection data with ID
+ */
+export async function createCollectionViaAPI(title, summary, serverUrl, apiToken) {
+  const url = `${serverUrl}/collections`;
+  return makeHttpRequest('POST', url, apiToken, { title, summary: summary || '' });
+}
+
+/**
+ * Update collection games via API
+ * @param {number} collectionId - Collection ID
+ * @param {Array<number>} gameIds - Array of game IDs
+ * @param {string} serverUrl - MyHomeGames server URL
+ * @param {string} apiToken - API token
+ * @returns {Promise<Object>} - Response data
+ */
+export async function updateCollectionGamesViaAPI(collectionId, gameIds, serverUrl, apiToken) {
+  const url = `${serverUrl}/collections/${collectionId}/games/order`;
+  return makeHttpRequest('PUT', url, apiToken, { gameIds });
+}
+
+/**
+ * Get all collections via API
+ * @param {string} serverUrl - MyHomeGames server URL
+ * @param {string} apiToken - API token
+ * @returns {Promise<Array<Object>>} - Array of collections
+ */
+export async function getCollectionsViaAPI(serverUrl, apiToken) {
+  const url = `${serverUrl}/collections`;
+  const response = await makeHttpRequest('GET', url, apiToken);
+  return response.collections || [];
 }

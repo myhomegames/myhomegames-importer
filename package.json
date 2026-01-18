@@ -12,12 +12,18 @@
   "bin": {
     "myhomegames-importer": "./cli.js"
   },
-  "keywords": ["gog", "galaxy", "importer", "myhomegames"],
+  "keywords": [
+    "gog",
+    "galaxy",
+    "importer",
+    "myhomegames"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "better-sqlite3": "^11.0.0",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "form-data": "^4.0.5"
   },
   "devDependencies": {
     "jest": "^29.7.0"
