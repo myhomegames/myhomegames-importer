@@ -19,7 +19,7 @@ const importers = {
   'gog-galaxy': {
     name: 'GOG Galaxy',
     handler: importFromGOGGalaxy,
-    requiredEnv: ['TWITCH_CLIENT_ID', 'TWITCH_CLIENT_SECRET'],
+    requiredEnv: ['SERVER_URL', 'API_TOKEN', 'TWITCH_CLIENT_ID', 'TWITCH_CLIENT_SECRET'],
     optionalEnv: ['GALAXY_DB_PATH', 'GALAXY_IMAGES_PATH', 'LIMIT'],
   },
 };
@@ -36,7 +36,7 @@ function printUsage() {
   console.log('');
   console.log('Examples:');
   console.log('  node cli.js gog-galaxy --metadata-path /path/to/metadata');
-  console.log('  METADATA_PATH=/path/to/metadata TWITCH_CLIENT_ID=xxx TWITCH_CLIENT_SECRET=xxx node cli.js gog-galaxy');
+  console.log('  METADATA_PATH=/path/to/metadata SERVER_URL=http://localhost:3000 API_TOKEN=xxx TWITCH_CLIENT_ID=xxx TWITCH_CLIENT_SECRET=xxx node cli.js gog-galaxy');
   console.log('');
 }
 
@@ -109,12 +109,24 @@ async function main() {
       'Library/Application Support/GOG Galaxy/Storage/GalaxyClient/Images'
     );
     
+    config.serverUrl = process.env.SERVER_URL || options.server_url || 'http://localhost:3000';
+    config.apiToken = process.env.API_TOKEN || options.api_token;
     config.twitchClientId = process.env.TWITCH_CLIENT_ID || options.twitch_client_id;
     config.twitchClientSecret = process.env.TWITCH_CLIENT_SECRET || options.twitch_client_secret;
     
     config.limit = process.env.LIMIT ? parseInt(process.env.LIMIT, 10) : (options.limit ? parseInt(options.limit, 10) : null);
     
     // Check required environment variables
+    if (!config.serverUrl) {
+      console.error('Error: SERVER_URL environment variable is required for GOG Galaxy importer');
+      process.exit(1);
+    }
+    
+    if (!config.apiToken) {
+      console.error('Error: API_TOKEN environment variable is required for GOG Galaxy importer');
+      process.exit(1);
+    }
+    
     if (!config.twitchClientId || !config.twitchClientSecret) {
       console.error('Error: TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET environment variables are required for GOG Galaxy importer');
       process.exit(1);

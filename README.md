@@ -11,7 +11,9 @@ More importers coming soon!
 ## Requirements
 
 - Node.js 18+
-- IGDB API credentials (Twitch Client ID and Secret) - required for game ID lookup
+- MyHomeGames server running and accessible
+- API token for MyHomeGames server authentication
+- IGDB API credentials (Twitch Client ID and Secret) - required for game search via server
 
 ## Installation
 
@@ -50,10 +52,12 @@ Common variables (apply to all importers):
 
 GOG Galaxy specific variables:
 
+- `SERVER_URL` - MyHomeGames server URL (default: `http://localhost:3000`)
+- `API_TOKEN` - API token for server authentication (required)
 - `GALAXY_DB_PATH` - Path to GOG Galaxy database (default: `~/Library/Application Support/GOG Galaxy/Storage/galaxy-2.0.db` on macOS)
 - `GALAXY_IMAGES_PATH` - Path to GOG Galaxy images directory (default: `~/Library/Application Support/GOG Galaxy/Storage/GalaxyClient/Images` on macOS)
-- `TWITCH_CLIENT_ID` - Twitch Client ID for IGDB API (required)
-- `TWITCH_CLIENT_SECRET` - Twitch Client Secret for IGDB API (required)
+- `TWITCH_CLIENT_ID` - Twitch Client ID for IGDB API (required, passed to server)
+- `TWITCH_CLIENT_SECRET` - Twitch Client Secret for IGDB API (required, passed to server)
 - `LIMIT` - Limit number of games to import (optional, for testing)
 
 #### Using .env File
@@ -85,6 +89,8 @@ node cli.js gog-galaxy
 
 # GOG Galaxy importer with environment variables
 METADATA_PATH=/path/to/metadata \
+SERVER_URL=http://localhost:3000 \
+API_TOKEN=xxx \
 TWITCH_CLIENT_ID=xxx \
 TWITCH_CLIENT_SECRET=xxx \
 node cli.js gog-galaxy
@@ -92,6 +98,8 @@ node cli.js gog-galaxy
 # GOG Galaxy importer with command-line options
 node cli.js gog-galaxy \
   --metadata-path /path/to/metadata \
+  --server-url http://localhost:3000 \
+  --api-token xxx \
   --galaxy-db-path /custom/path/galaxy-2.0.db \
   --galaxy-images-path /custom/path/Images \
   --twitch-client-id xxx \
@@ -100,6 +108,8 @@ node cli.js gog-galaxy \
 # Limit import to first 10 games (for testing)
 LIMIT=10 \
 METADATA_PATH=/path/to/metadata \
+SERVER_URL=http://localhost:3000 \
+API_TOKEN=xxx \
 TWITCH_CLIENT_ID=xxx \
 TWITCH_CLIENT_SECRET=xxx \
 node cli.js gog-galaxy
@@ -116,7 +126,7 @@ myhomegames-importer/
 ├── .env.example                # Example environment variables file
 ├── importers/
 │   ├── common/                 # Shared utilities
-│   │   ├── igdb.js            # IGDB API utilities
+│   │   ├── igdb.js            # MyHomeGames server API utilities (for game search)
 │   │   └── files.js           # File operations utilities
 │   └── gog-galaxy/            # GOG Galaxy importer
 │       └── index.js
@@ -132,7 +142,7 @@ myhomegames-importer/
    - Queries `GamePieces` table and extracts game titles from the JSON `value` field (`json_extract(value, '$.title')`)
    - Links to `PlayTasks` table via `releaseKey` to get `playTaskId`
    - Links to `PlayTaskLaunchParameters` via `playTaskId` to get executable paths
-   - For each game, searches IGDB to get the correct game ID
+   - For each game, searches via MyHomeGames server API (which searches IGDB) to get the correct game ID
    - Creates game directory in MyHomeGames format: `content/games/{igdb_id}/`
    - Copies executable script from `PlayTaskLaunchParameters.executablePath` to `script.sh` or `script.bat`
    - Copies images using `releaseKey` from GOG Galaxy images directory to `cover.webp` and `background.webp`
@@ -156,8 +166,8 @@ The GOG Galaxy importer queries the following database tables:
 
 - The importer creates collections with numeric IDs (timestamps)
 - Images are copied as-is (no conversion to WebP format, rename only)
-- Games not found on IGDB are skipped
-- Rate limiting: 200ms delay between IGDB API calls to avoid rate limits
+- Games not found via server search are skipped
+- The importer uses the MyHomeGames server API instead of calling IGDB directly
 
 ## Adding New Importers
 

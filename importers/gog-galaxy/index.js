@@ -4,30 +4,64 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
-import { searchGameOnIGDB } from '../common/igdb.js';
+import { searchGameOnServer } from '../common/igdb.js';
 import { ensureDirectoryExists, copyFile, writeJsonFile } from '../common/files.js';
+
+/**
+ * Sanitize executable name for filesystem (same logic as server)
+ */
+function sanitizeExecutableName(name) {
+  if (!name || typeof name !== 'string') return '';
+  return name.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
 
 /**
  * Import a single game
  */
-async function importGame(gameTitle, releaseKey, executablePath, metadataPath, galaxyImagesPath, twitchClientId, twitchClientSecret) {
+async function importGame(gameTitle, releaseKey, executablePath, executableLabel, metadataPath, galaxyImagesPath, serverUrl, apiToken, twitchClientId, twitchClientSecret) {
   console.log(`\nProcessing game: ${gameTitle}`);
   
-  // Search game on IGDB
-  console.log(`  Searching on IGDB...`);
-  const igdbGame = await searchGameOnIGDB(gameTitle, twitchClientId, twitchClientSecret);
+  // Search game on MyHomeGames server
+  console.log(`  Searching on MyHomeGames server...`);
+  const igdbGame = await searchGameOnServer(gameTitle, serverUrl, apiToken, twitchClientId, twitchClientSecret);
   
   if (!igdbGame) {
-    console.warn(`  Warning: Game not found on IGDB, skipping: ${gameTitle}`);
+    console.warn(`  Warning: Game not found, skipping: ${gameTitle}`);
     return null;
   }
   
   const gameId = igdbGame.id;
-  console.log(`  Found on IGDB: ${igdbGame.name} (ID: ${gameId})`);
+  console.log(`  Found: ${igdbGame.name} (ID: ${gameId})`);
   
   // Create game directory
   const gameDir = path.join(metadataPath, 'content', 'games', String(gameId));
   ensureDirectoryExists(gameDir);
+  
+  // Copy executable script if available
+  let executableName = null;
+  if (executablePath) {
+    // Use label if available, otherwise use default name
+    const label = executableLabel || 'script';
+    executableName = sanitizeExecutableName(label);
+    
+    // Determine script extension based on original file
+    const ext = path.extname(executablePath).toLowerCase();
+    const scriptExtension = ext === '.bat' ? '.bat' : '.sh';
+    const scriptName = `${executableName}${scriptExtension}`;
+    const scriptPath = path.join(gameDir, scriptName);
+    
+    if (copyFile(executablePath, scriptPath)) {
+      // Make script executable (Unix-like systems, only for .sh)
+      if (scriptExtension === '.sh') {
+        try {
+          fs.chmodSync(scriptPath, 0o755);
+        } catch (e) {
+          // Ignore chmod errors on Windows
+        }
+      }
+      console.log(`  Copied script: ${scriptName}`);
+    }
+  }
   
   // Create metadata.json
   const gameMetadataPath = path.join(gameDir, 'metadata.json');
@@ -40,28 +74,15 @@ async function importGame(gameTitle, releaseKey, executablePath, metadataPath, g
     stars: null,
     genre: null,
   };
+  
+  // Add executables array if we have an executable
+  if (executableName) {
+    // Use the original label (not sanitized) in the metadata
+    gameMetadata.executables = [executableLabel || executableName];
+  }
+  
   writeJsonFile(gameMetadataPath, gameMetadata);
   console.log(`  Created metadata.json`);
-  
-  // Copy executable script if available
-  if (executablePath) {
-    // Determine script extension based on original file
-    const ext = path.extname(executablePath).toLowerCase();
-    const scriptName = ext === '.bat' ? 'script.bat' : 'script.sh';
-    const scriptPath = path.join(gameDir, scriptName);
-    
-    if (copyFile(executablePath, scriptPath)) {
-      // Make script executable (Unix-like systems, only for .sh)
-      if (scriptName === 'script.sh') {
-        try {
-          fs.chmodSync(scriptPath, 0o755);
-        } catch (e) {
-          // Ignore chmod errors on Windows
-        }
-      }
-      console.log(`  Copied script: ${scriptName}`);
-    }
-  }
   
   // Copy images from GOG Galaxy
   if (releaseKey) {
@@ -201,6 +222,8 @@ export async function importFromGOGGalaxy(config) {
     galaxyDbPath,
     galaxyImagesPath,
     metadataPath,
+    serverUrl,
+    apiToken,
     twitchClientId,
     twitchClientSecret,
     limit,
@@ -220,8 +243,16 @@ export async function importFromGOGGalaxy(config) {
     throw new Error(`Metadata path does not exist: ${metadataPath}`);
   }
   
+  if (!serverUrl) {
+    throw new Error('SERVER_URL is required (e.g., http://localhost:3000)');
+  }
+  
+  if (!apiToken) {
+    throw new Error('API_TOKEN is required for server authentication');
+  }
+  
   if (!twitchClientId || !twitchClientSecret) {
-    throw new Error('TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET are required');
+    throw new Error('TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET are required for IGDB search');
   }
   
   // Open GOG Galaxy database
@@ -238,7 +269,8 @@ export async function importFromGOGGalaxy(config) {
       SELECT 
         gp.releaseKey,
         json_extract(gp.value, '$.title') as title,
-        ptlp.executablePath
+        ptlp.executablePath,
+        ptlp.label
       FROM GamePieces gp
       LEFT JOIN PlayTasks pt ON gp.releaseKey = pt.gameReleaseKey
       LEFT JOIN PlayTaskLaunchParameters ptlp ON pt.id = ptlp.playTaskId
@@ -247,7 +279,7 @@ export async function importFromGOGGalaxy(config) {
         AND gp.releaseKey IS NOT NULL
         AND json_extract(gp.value, '$.title') IS NOT NULL
         AND json_extract(gp.value, '$.title') != ''
-      GROUP BY gp.releaseKey, ptlp.executablePath
+      GROUP BY gp.releaseKey, ptlp.executablePath, ptlp.label
       ORDER BY title
       ${limit ? `LIMIT ${limit}` : ''}
     `);
@@ -269,8 +301,11 @@ export async function importFromGOGGalaxy(config) {
           game.title,
           game.releaseKey,
           game.executablePath,
+          game.label,
           metadataPath,
           galaxyImagesPath,
+          serverUrl,
+          apiToken,
           twitchClientId,
           twitchClientSecret
         );
@@ -283,9 +318,6 @@ export async function importFromGOGGalaxy(config) {
         } else {
           skipCount++;
         }
-        
-        // Small delay to avoid rate limiting on IGDB
-        await new Promise(resolve => setTimeout(resolve, 200));
       } catch (error) {
         console.error(`  Error importing ${game.title}:`, error.message);
         skipCount++;
