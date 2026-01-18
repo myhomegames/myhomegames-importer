@@ -17,8 +17,17 @@ function sanitizeExecutableName(name) {
 
 /**
  * Import a single game
+ * @param {string} gameTitle - Game title
+ * @param {string} releaseKey - GOG Galaxy release key
+ * @param {Array<{path: string, label: string|null}>} executables - Array of executables with path and label
+ * @param {string} metadataPath - Path to metadata directory
+ * @param {string} galaxyImagesPath - Path to GOG Galaxy images
+ * @param {string} serverUrl - MyHomeGames server URL
+ * @param {string} apiToken - API token
+ * @param {string} twitchClientId - Twitch Client ID
+ * @param {string} twitchClientSecret - Twitch Client Secret
  */
-async function importGame(gameTitle, releaseKey, executablePath, executableLabel, metadataPath, galaxyImagesPath, serverUrl, apiToken, twitchClientId, twitchClientSecret) {
+async function importGame(gameTitle, releaseKey, executables, metadataPath, galaxyImagesPath, serverUrl, apiToken, twitchClientId, twitchClientSecret) {
   console.log(`\nProcessing game: ${gameTitle}`);
   
   // Search game on MyHomeGames server
@@ -37,20 +46,32 @@ async function importGame(gameTitle, releaseKey, executablePath, executableLabel
   const gameDir = path.join(metadataPath, 'content', 'games', String(gameId));
   ensureDirectoryExists(gameDir);
   
-  // Copy executable script if available
-  let executableName = null;
-  if (executablePath) {
-    // Use label if available, otherwise use default name
-    const label = executableLabel || 'script';
-    executableName = sanitizeExecutableName(label);
+  // Process all executables
+  const executableLabels = [];
+  const usedFileNames = new Set(); // Track used filenames to avoid collisions
+  
+  for (const exec of executables) {
+    if (!exec.path) continue;
+    
+    const label = exec.label || 'script';
+    let executableName = sanitizeExecutableName(label);
     
     // Determine script extension based on original file
-    const ext = path.extname(executablePath).toLowerCase();
+    const ext = path.extname(exec.path).toLowerCase();
     const scriptExtension = ext === '.bat' ? '.bat' : '.sh';
-    const scriptName = `${executableName}${scriptExtension}`;
+    
+    // Handle filename collisions: if sanitized name already used, add a number
+    let scriptName = `${executableName}${scriptExtension}`;
+    let counter = 1;
+    while (usedFileNames.has(scriptName)) {
+      scriptName = `${executableName}_${counter}${scriptExtension}`;
+      counter++;
+    }
+    usedFileNames.add(scriptName);
+    
     const scriptPath = path.join(gameDir, scriptName);
     
-    if (copyFile(executablePath, scriptPath)) {
+    if (copyFile(exec.path, scriptPath)) {
       // Make script executable (Unix-like systems, only for .sh)
       if (scriptExtension === '.sh') {
         try {
@@ -59,7 +80,9 @@ async function importGame(gameTitle, releaseKey, executablePath, executableLabel
           // Ignore chmod errors on Windows
         }
       }
-      console.log(`  Copied script: ${scriptName}`);
+      console.log(`  Copied script: ${scriptName} (label: ${label})`);
+      // Use the original label (not sanitized) in the metadata
+      executableLabels.push(label);
     }
   }
   
@@ -75,14 +98,13 @@ async function importGame(gameTitle, releaseKey, executablePath, executableLabel
     genre: null,
   };
   
-  // Add executables array if we have an executable
-  if (executableName) {
-    // Use the original label (not sanitized) in the metadata
-    gameMetadata.executables = [executableLabel || executableName];
+  // Add executables array if we have executables
+  if (executableLabels.length > 0) {
+    gameMetadata.executables = executableLabels;
   }
   
   writeJsonFile(gameMetadataPath, gameMetadata);
-  console.log(`  Created metadata.json`);
+  console.log(`  Created metadata.json with ${executableLabels.length} executable(s)`);
   
   // Copy images from GOG Galaxy
   if (releaseKey) {
@@ -285,23 +307,45 @@ export async function importFromGOGGalaxy(config) {
     `);
     
     const games = gamesQuery.all();
-    console.log(`Found ${games.length} games to import\n`);
+    console.log(`Found ${games.length} game entries to import\n`);
+    
+    // Group games by releaseKey to handle multiple executables per game
+    const gamesByReleaseKey = new Map();
+    for (const game of games) {
+      if (!game.releaseKey) continue;
+      
+      if (!gamesByReleaseKey.has(game.releaseKey)) {
+        gamesByReleaseKey.set(game.releaseKey, {
+          title: game.title,
+          executables: []
+        });
+      }
+      
+      // Add executable if it exists
+      if (game.executablePath) {
+        gamesByReleaseKey.get(game.releaseKey).executables.push({
+          path: game.executablePath,
+          label: game.label || null
+        });
+      }
+    }
+    
+    console.log(`Found ${gamesByReleaseKey.size} unique games (some may have multiple executables)\n`);
     
     // Map to track releaseKey -> gameId mapping
     const gameReleaseKeyMap = new Map();
     
-    // Import each game
+    // Import each game (processing all executables together)
     console.log('=== Importing Games ===');
     let successCount = 0;
     let skipCount = 0;
     
-    for (const game of games) {
+    for (const [releaseKey, gameData] of gamesByReleaseKey) {
       try {
         const gameId = await importGame(
-          game.title,
-          game.releaseKey,
-          game.executablePath,
-          game.label,
+          gameData.title,
+          releaseKey,
+          gameData.executables,
           metadataPath,
           galaxyImagesPath,
           serverUrl,
@@ -312,14 +356,12 @@ export async function importFromGOGGalaxy(config) {
         
         if (gameId) {
           successCount++;
-          if (game.releaseKey) {
-            gameReleaseKeyMap.set(game.releaseKey, gameId);
-          }
+          gameReleaseKeyMap.set(releaseKey, gameId);
         } else {
           skipCount++;
         }
       } catch (error) {
-        console.error(`  Error importing ${game.title}:`, error.message);
+        console.error(`  Error importing ${gameData.title}:`, error.message);
         skipCount++;
       }
     }
