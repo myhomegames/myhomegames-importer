@@ -34,9 +34,19 @@ function printUsage() {
     console.log(`  ${key} - ${importer.name}`);
   }
   console.log('');
+  console.log('Options:');
+  console.log('  --metadata-path <path>     Path to MyHomeGames metadata directory');
+  console.log('  --search <term>            Filter games by title (case-insensitive)');
+  console.log('  --games-only               Import only games (skip collections)');
+  console.log('  --collections-only         Import only collections (skip games)');
+  console.log('');
   console.log('Examples:');
   console.log('  node cli.js gog-galaxy --metadata-path /path/to/metadata');
+  console.log('  node cli.js gog-galaxy --metadata-path /path/to/metadata --search "Game Title"');
+  console.log('  node cli.js gog-galaxy --metadata-path /path/to/metadata --games-only');
+  console.log('  node cli.js gog-galaxy --metadata-path /path/to/metadata --collections-only');
   console.log('  METADATA_PATH=/path/to/metadata SERVER_URL=http://localhost:3000 API_TOKEN=xxx TWITCH_CLIENT_ID=xxx TWITCH_CLIENT_SECRET=xxx node cli.js gog-galaxy');
+  console.log('  METADATA_PATH=/path/to/metadata SEARCH="Game Title" node cli.js gog-galaxy');
   console.log('');
 }
 
@@ -115,6 +125,9 @@ async function main() {
     config.twitchClientSecret = process.env.TWITCH_CLIENT_SECRET || options.twitch_client_secret;
     
     config.limit = process.env.LIMIT ? parseInt(process.env.LIMIT, 10) : (options.limit ? parseInt(options.limit, 10) : null);
+    config.search = process.env.SEARCH || options.search || null;
+    config.gamesOnly = process.env.GAMES_ONLY === 'true' || options.games_only === true || options.gamesOnly === true || false;
+    config.collectionsOnly = process.env.COLLECTIONS_ONLY === 'true' || options.collections_only === true || options.collectionsOnly === true || false;
     
     // Check required environment variables
     if (!config.serverUrl) {

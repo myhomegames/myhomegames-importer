@@ -59,6 +59,9 @@ GOG Galaxy specific variables:
 - `TWITCH_CLIENT_ID` - Twitch Client ID for IGDB API (required, passed to server)
 - `TWITCH_CLIENT_SECRET` - Twitch Client Secret for IGDB API (required, passed to server)
 - `LIMIT` - Limit number of games to import (optional, for testing)
+- `SEARCH` - Filter games by title (case-insensitive, optional)
+- `GAMES_ONLY` - Import only games, skip collections (optional, boolean)
+- `COLLECTIONS_ONLY` - Import only collections, skip games (optional, boolean)
 
 #### Using .env File
 
@@ -104,6 +107,18 @@ node cli.js gog-galaxy \
   --galaxy-images-path /custom/path/Images \
   --twitch-client-id xxx \
   --twitch-client-secret xxx
+
+# Filter games by title search term
+node cli.js gog-galaxy --metadata-path /path/to/metadata --search "Game Title"
+SEARCH="Game Title" node cli.js gog-galaxy --metadata-path /path/to/metadata
+
+# Import only games (skip collections)
+node cli.js gog-galaxy --metadata-path /path/to/metadata --games-only
+GAMES_ONLY=true node cli.js gog-galaxy --metadata-path /path/to/metadata
+
+# Import only collections (skip games)
+node cli.js gog-galaxy --metadata-path /path/to/metadata --collections-only
+COLLECTIONS_ONLY=true node cli.js gog-galaxy --metadata-path /path/to/metadata
 
 # Limit import to first 10 games (for testing)
 LIMIT=10 \
@@ -168,6 +183,10 @@ The GOG Galaxy importer queries the following database tables:
 - Images are copied as-is (no conversion to WebP format, rename only)
 - Games not found via server search are skipped
 - The importer uses the MyHomeGames server API instead of calling IGDB directly
+- Collections reference games by IGDB ID (not by releaseKey)
+- The importer filters label extensions (`.sh` and `.bat`) from executable labels
+- Duplicate detection is based on game title (normalized, case-insensitive)
+- Games already present in the metadata path are skipped (based on IGDB ID)
 
 ## Adding New Importers
 

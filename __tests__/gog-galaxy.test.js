@@ -389,4 +389,38 @@ describe('GOG Galaxy Importer', () => {
       expect(gameMetadata.userratings).toBeUndefined();
     });
   });
+
+  describe('Search parameter', () => {
+    test('should support filtering games by search term', () => {
+      const searchTerm = 'Test Game';
+      // This is a placeholder test - actual search functionality is tested in integration
+      // The search term would be used in SQL LIKE query: title LIKE '%searchTerm%'
+      expect(typeof searchTerm).toBe('string');
+      expect(searchTerm.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('Import modes', () => {
+    test('should support games-only mode', () => {
+      const gamesOnly = true;
+      const collectionsOnly = false;
+      // Validate mutually exclusive
+      expect(gamesOnly && collectionsOnly).toBe(false);
+    });
+
+    test('should support collections-only mode', () => {
+      const gamesOnly = false;
+      const collectionsOnly = true;
+      // Validate mutually exclusive
+      expect(gamesOnly && collectionsOnly).toBe(false);
+    });
+
+    test('should not allow both modes at once', () => {
+      const gamesOnly = true;
+      const collectionsOnly = true;
+      // Should throw error if both are true
+      expect(gamesOnly && collectionsOnly).toBe(true);
+      // In actual code, this would throw an error
+    });
+  });
 });

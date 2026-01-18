@@ -246,8 +246,10 @@ async function importGame(gameTitle, releaseKey, executables, metadataPath, gala
 
 /**
  * Import collections (tags)
+ * Note: This function now searches for games by IGDB ID in the filesystem,
+ * not by releaseKey, since the collection should reference games by their IGDB ID.
  */
-function importCollections(metadataPath, gameReleaseKeyMap, tagsData) {
+function importCollections(metadataPath, gameReleaseKeyMap, tagsData, gamesByReleaseKey) {
   console.log('\n=== Importing Collections ===');
   
   // Load existing collections to avoid duplicates
@@ -304,17 +306,58 @@ function importCollections(metadataPath, gameReleaseKeyMap, tagsData) {
       games: [], // Will be populated with game IDs from releaseKeys
     };
     
-    // Map releaseKeys to game IDs (convert to numbers as MyHomeGames uses numeric IDs)
+    // Map releaseKeys to game IDs by looking up in gamesByReleaseKey map
+    // and then finding the corresponding IGDB ID in the filesystem by title
     const gameIds = [];
     let missingGameCount = 0;
+    
+    // First, build a map of title -> gameId from the filesystem
+    const gamesDir = path.join(metadataPath, 'content', 'games');
+    const titleToGameIdMap = new Map();
+    if (fs.existsSync(gamesDir)) {
+      const gameDirs = fs.readdirSync(gamesDir, { withFileTypes: true });
+      for (const gameDir of gameDirs) {
+        if (gameDir.isDirectory()) {
+          const gameMetadataPath = path.join(gamesDir, gameDir.name, 'metadata.json');
+          if (fs.existsSync(gameMetadataPath)) {
+            try {
+              const gameMetadata = JSON.parse(fs.readFileSync(gameMetadataPath, 'utf-8'));
+              if (gameMetadata.title) {
+                const normalizedTitle = gameMetadata.title.toLowerCase().trim();
+                // The directory name is the IGDB ID
+                const gameId = parseInt(gameDir.name, 10);
+                if (!isNaN(gameId)) {
+                  titleToGameIdMap.set(normalizedTitle, gameId);
+                }
+              }
+            } catch (e) {
+              // Ignore invalid JSON
+            }
+          }
+        }
+      }
+    }
+    
+    // Now map releaseKeys to game IDs using title lookup
     for (const releaseKey of releaseKeys) {
-      const gameId = gameReleaseKeyMap.get(releaseKey);
-      if (gameId) {
-        // MyHomeGames uses numeric IDs for games in collections
-        gameIds.push(typeof gameId === 'number' ? gameId : parseInt(gameId, 10));
+      // Get game title from gamesByReleaseKey
+      const gameData = gamesByReleaseKey.get(releaseKey);
+      if (gameData && gameData.title) {
+        const normalizedTitle = gameData.title.toLowerCase().trim();
+        const gameId = titleToGameIdMap.get(normalizedTitle);
+        if (gameId) {
+          gameIds.push(gameId);
+        } else {
+          // Try to get from gameReleaseKeyMap as fallback (for games imported in this session)
+          const fallbackGameId = gameReleaseKeyMap.get(releaseKey);
+          if (fallbackGameId) {
+            gameIds.push(typeof fallbackGameId === 'number' ? fallbackGameId : parseInt(fallbackGameId, 10));
+          } else {
+            missingGameCount++;
+          }
+        }
       } else {
         missingGameCount++;
-        console.warn(`    Warning: No IGDB game ID found for releaseKey: ${releaseKey} (game may not have been imported)`);
       }
     }
     
@@ -345,6 +388,9 @@ export async function importFromGOGGalaxy(config) {
     twitchClientId,
     twitchClientSecret,
     limit,
+    search,
+    gamesOnly = false,
+    collectionsOnly = false,
   } = config;
 
   console.log('=== GOG Galaxy Importer ===\n');
@@ -378,11 +424,16 @@ export async function importFromGOGGalaxy(config) {
   const db = new Database(galaxyDbPath, { readonly: true });
   
   try {
-    // Get all games from GamePieces
-    // GamePieces.value is a JSON object containing the title
-    // PlayTasks links releaseKey to playTaskId
-    // PlayTaskLaunchParameters contains executablePath linked via playTaskId
-    console.log('\n=== Querying Games ===');
+    // Import games (unless collections-only mode)
+    if (!collectionsOnly) {
+      // Get all games from GamePieces
+      // GamePieces.value is a JSON object containing the title
+      // PlayTasks links releaseKey to playTaskId
+      // PlayTaskLaunchParameters contains executablePath linked via playTaskId
+      console.log('\n=== Querying Games ===');
+    if (search) {
+      console.log(`Filtering by search term: "${search}"\n`);
+    }
     const gamesQuery = db.prepare(`
       SELECT DISTINCT
         gp.releaseKey,
@@ -399,11 +450,12 @@ export async function importFromGOGGalaxy(config) {
         AND lr.releaseKey IS NOT NULL
         AND json_extract(gp.value, '$.title') IS NOT NULL
         AND json_extract(gp.value, '$.title') != ''
+        ${search ? `AND json_extract(gp.value, '$.title') LIKE '%' || ? || '%'` : ''}
       ORDER BY title
       ${limit ? `LIMIT ${limit}` : ''}
     `);
     
-    const games = gamesQuery.all();
+    const games = search ? gamesQuery.all(search) : gamesQuery.all();
     console.log(`Found ${games.length} game entries to import\n`);
     
     // Group games by releaseKey to handle multiple executables per game
@@ -508,23 +560,100 @@ export async function importFromGOGGalaxy(config) {
       }
     }
     
-    console.log(`\n=== Import Summary ===`);
-    console.log(`Successfully imported: ${successCount}`);
-    console.log(`Skipped: ${skipCount}`);
-    
-    // Get games for each tag
-    const gamesByTagQuery = db.prepare(`
-      SELECT DISTINCT urt.tag, urt.releaseKey
-      FROM UserReleaseTags urt
-      WHERE urt.tag IS NOT NULL AND urt.tag != ''
-        AND urt.releaseKey IS NOT NULL
-      ORDER BY urt.tag, urt.releaseKey
-    `);
-    const tagsData = gamesByTagQuery.all();
-    
-    // Import collections
-    if (gameReleaseKeyMap.size > 0 && tagsData.length > 0) {
-      importCollections(metadataPath, gameReleaseKeyMap, tagsData);
+      console.log(`\n=== Import Summary ===`);
+      console.log(`Successfully imported: ${successCount}`);
+      console.log(`Skipped: ${skipCount}`);
+      
+      // Import collections (unless games-only mode)
+      if (!gamesOnly) {
+        // Get games for each tag
+        const gamesByTagQuery = db.prepare(`
+          SELECT DISTINCT urt.tag, urt.releaseKey
+          FROM UserReleaseTags urt
+          WHERE urt.tag IS NOT NULL AND urt.tag != ''
+            AND urt.releaseKey IS NOT NULL
+          ORDER BY urt.tag, urt.releaseKey
+        `);
+        const tagsData = gamesByTagQuery.all();
+        
+        // Import collections
+        if ((gameReleaseKeyMap.size > 0 || gamesByReleaseKey.size > 0) && tagsData.length > 0) {
+          importCollections(metadataPath, gameReleaseKeyMap, tagsData, gamesByReleaseKey);
+        }
+      } else {
+        console.log('\n=== Skipping Collections (--games-only mode) ===');
+      }
+    } else {
+      console.log('\n=== Skipping Games (--collections-only mode) ===');
+      
+      // Import only collections - need to get game data for mapping
+      // First, get all games from GamePieces to build gamesByReleaseKey map
+      const gamesQuery = db.prepare(`
+        SELECT DISTINCT
+          gp.releaseKey,
+          json_extract(gp.value, '$.title') as title,
+          ptlp.executablePath,
+          ptlp.label
+        FROM GamePieces gp
+        LEFT JOIN LibraryReleases lr ON gp.releaseKey = lr.releaseKey
+        LEFT JOIN PlayTasks pt ON gp.releaseKey = pt.gameReleaseKey
+        LEFT JOIN PlayTaskLaunchParameters ptlp ON pt.id = ptlp.playTaskId
+        WHERE gp.value IS NOT NULL 
+          AND gp.value != ''
+          AND gp.releaseKey IS NOT NULL
+          AND lr.releaseKey IS NOT NULL
+          AND json_extract(gp.value, '$.title') IS NOT NULL
+          AND json_extract(gp.value, '$.title') != ''
+        ORDER BY title
+      `);
+      
+      const games = gamesQuery.all();
+      
+      // Group games by releaseKey to get titles
+      const gamesByReleaseKey = new Map();
+      for (const game of games) {
+        if (!game.releaseKey) continue;
+        
+        if (!gamesByReleaseKey.has(game.releaseKey)) {
+          gamesByReleaseKey.set(game.releaseKey, {
+            title: game.title,
+            executables: [],
+            executableSet: new Set()
+          });
+        }
+        
+        if (game.executablePath) {
+          const executableKey = `${game.executablePath}|${game.label || ''}`;
+          const gameData = gamesByReleaseKey.get(game.releaseKey);
+          if (!gameData.executableSet.has(executableKey)) {
+            gameData.executableSet.add(executableKey);
+            gameData.executables.push({
+              path: game.executablePath,
+              label: game.label || null
+            });
+          }
+        }
+      }
+      
+      // Clean up executableSet
+      for (const gameData of gamesByReleaseKey.values()) {
+        delete gameData.executableSet;
+      }
+      
+      // Get games for each tag
+      const gamesByTagQuery = db.prepare(`
+        SELECT DISTINCT urt.tag, urt.releaseKey
+        FROM UserReleaseTags urt
+        WHERE urt.tag IS NOT NULL AND urt.tag != ''
+          AND urt.releaseKey IS NOT NULL
+        ORDER BY urt.tag, urt.releaseKey
+      `);
+      const tagsData = gamesByTagQuery.all();
+      
+      // Import collections
+      if (gamesByReleaseKey.size > 0 && tagsData.length > 0) {
+        importCollections(metadataPath, new Map(), tagsData, gamesByReleaseKey);
+      }
     }
     
   } finally {
