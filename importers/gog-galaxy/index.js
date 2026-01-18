@@ -53,7 +53,12 @@ async function importGame(gameTitle, releaseKey, executables, metadataPath, gala
   for (const exec of executables) {
     if (!exec.path) continue;
     
-    const label = exec.label || 'script';
+    // Clean label: remove .sh or .bat extension if present
+    let label = exec.label || 'script';
+    if (label.endsWith('.sh') || label.endsWith('.bat')) {
+      label = label.slice(0, -4); // Remove last 4 characters (.sh or .bat)
+    }
+    
     let executableName = sanitizeExecutableName(label);
     
     // Determine script extension based on original file
@@ -288,20 +293,21 @@ export async function importFromGOGGalaxy(config) {
     // PlayTaskLaunchParameters contains executablePath linked via playTaskId
     console.log('\n=== Querying Games ===');
     const gamesQuery = db.prepare(`
-      SELECT 
+      SELECT DISTINCT
         gp.releaseKey,
         json_extract(gp.value, '$.title') as title,
         ptlp.executablePath,
         ptlp.label
       FROM GamePieces gp
+      LEFT JOIN LibraryReleases lr ON gp.releaseKey = lr.releaseKey
       LEFT JOIN PlayTasks pt ON gp.releaseKey = pt.gameReleaseKey
       LEFT JOIN PlayTaskLaunchParameters ptlp ON pt.id = ptlp.playTaskId
       WHERE gp.value IS NOT NULL 
         AND gp.value != ''
         AND gp.releaseKey IS NOT NULL
+        AND lr.releaseKey IS NOT NULL
         AND json_extract(gp.value, '$.title') IS NOT NULL
         AND json_extract(gp.value, '$.title') != ''
-      GROUP BY gp.releaseKey, ptlp.executablePath, ptlp.label
       ORDER BY title
       ${limit ? `LIMIT ${limit}` : ''}
     `);
@@ -310,30 +316,46 @@ export async function importFromGOGGalaxy(config) {
     console.log(`Found ${games.length} game entries to import\n`);
     
     // Group games by releaseKey to handle multiple executables per game
+    // Note: It's normal to have the same releaseKey multiple times in query results
+    // when a game has multiple executables - the grouping handles this correctly
     const gamesByReleaseKey = new Map();
+    
     for (const game of games) {
       if (!game.releaseKey) continue;
       
       if (!gamesByReleaseKey.has(game.releaseKey)) {
         gamesByReleaseKey.set(game.releaseKey, {
           title: game.title,
-          executables: []
+          executables: [],
+          executableSet: new Set() // Track unique executables to avoid duplicates
         });
       }
       
-      // Add executable if it exists
+      // Add executable if it exists and not already added
       if (game.executablePath) {
-        gamesByReleaseKey.get(game.releaseKey).executables.push({
-          path: game.executablePath,
-          label: game.label || null
-        });
+        const executableKey = `${game.executablePath}|${game.label || ''}`;
+        const gameData = gamesByReleaseKey.get(game.releaseKey);
+        
+        if (!gameData.executableSet.has(executableKey)) {
+          gameData.executableSet.add(executableKey);
+          gameData.executables.push({
+            path: game.executablePath,
+            label: game.label || null
+          });
+        }
       }
+    }
+    
+    // Clean up executableSet (no longer needed after grouping)
+    for (const gameData of gamesByReleaseKey.values()) {
+      delete gameData.executableSet;
     }
     
     console.log(`Found ${gamesByReleaseKey.size} unique games (some may have multiple executables)\n`);
     
     // Map to track releaseKey -> gameId mapping
     const gameReleaseKeyMap = new Map();
+    const processedTitles = new Set(); // Track processed titles (normalized) to avoid duplicates
     
     // Import each game (processing all executables together)
     console.log('=== Importing Games ===');
@@ -341,6 +363,17 @@ export async function importFromGOGGalaxy(config) {
     let skipCount = 0;
     
     for (const [releaseKey, gameData] of gamesByReleaseKey) {
+      // Normalize title for duplicate detection (lowercase, trim)
+      const normalizedTitle = gameData.title.toLowerCase().trim();
+      
+      // Skip if this title was already processed
+      if (processedTitles.has(normalizedTitle)) {
+        console.log(`  Skipping duplicate title: ${gameData.title} (releaseKey: ${releaseKey})`);
+        continue;
+      }
+      
+      processedTitles.add(normalizedTitle);
+      
       try {
         const gameId = await importGame(
           gameData.title,
