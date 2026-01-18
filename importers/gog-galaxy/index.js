@@ -4,7 +4,7 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
-import { searchGameOnServer } from '../common/igdb.js';
+import { searchGameOnServer, getGameDetailsFromServer } from '../common/igdb.js';
 import { ensureDirectoryExists, copyFile, writeJsonFile } from '../common/files.js';
 
 /**
@@ -39,6 +39,15 @@ async function importGame(gameTitle, releaseKey, executables, metadataPath, gala
   
   const gameId = igdbGame.id;
   console.log(`  Found: ${igdbGame.name} (ID: ${gameId})`);
+  
+  // Get full game details from IGDB
+  console.log(`  Fetching full game details...`);
+  let fullGameData = null;
+  try {
+    fullGameData = await getGameDetailsFromServer(gameId, serverUrl, apiToken, twitchClientId, twitchClientSecret);
+  } catch (error) {
+    console.warn(`  Warning: Failed to fetch full game details: ${error.message}`);
+  }
   
   // Create game directory
   const gameDir = path.join(metadataPath, 'content', 'games', String(gameId));
@@ -91,17 +100,99 @@ async function importGame(gameTitle, releaseKey, executables, metadataPath, gala
     }
   }
   
-  // Create metadata.json
+  // Create metadata.json with all available fields from IGDB
   const gameMetadataPath = path.join(gameDir, 'metadata.json');
   const gameMetadata = {
-    title: igdbGame.name,
-    summary: '',
-    year: null,
-    month: null,
-    day: null,
-    stars: null,
-    genre: null,
+    title: fullGameData?.name || igdbGame.name,
+    summary: fullGameData?.summary || '',
+    year: fullGameData?.releaseDateFull?.year || fullGameData?.releaseDate || null,
+    month: fullGameData?.releaseDateFull?.month || null,
+    day: fullGameData?.releaseDateFull?.day || null,
+    stars: null, // Not available from IGDB
+    genre: fullGameData?.genres && fullGameData.genres.length > 0 ? fullGameData.genres : null,
   };
+  
+  // Add IGDB cover and background URLs if available
+  if (fullGameData?.cover) {
+    gameMetadata.igdbCover = fullGameData.cover;
+  }
+  
+  if (fullGameData?.background) {
+    gameMetadata.igdbBackground = fullGameData.background;
+  }
+  
+  // Add optional fields if available
+  if (fullGameData?.criticRating !== null && fullGameData?.criticRating !== undefined) {
+    gameMetadata.criticratings = fullGameData.criticRating / 10; // Convert from 0-100 to 0-10 scale
+  }
+  
+  if (fullGameData?.userRating !== null && fullGameData?.userRating !== undefined) {
+    gameMetadata.userratings = fullGameData.userRating / 10; // Convert from 0-100 to 0-10 scale
+  }
+  
+  if (fullGameData?.themes && fullGameData.themes.length > 0) {
+    gameMetadata.themes = fullGameData.themes;
+  }
+  
+  if (fullGameData?.platforms && fullGameData.platforms.length > 0) {
+    gameMetadata.platforms = fullGameData.platforms;
+  }
+  
+  if (fullGameData?.gameModes && fullGameData.gameModes.length > 0) {
+    gameMetadata.gameModes = fullGameData.gameModes;
+  }
+  
+  if (fullGameData?.playerPerspectives && fullGameData.playerPerspectives.length > 0) {
+    gameMetadata.playerPerspectives = fullGameData.playerPerspectives;
+  }
+  
+  if (fullGameData?.websites && fullGameData.websites.length > 0) {
+    gameMetadata.websites = fullGameData.websites;
+  }
+  
+  if (fullGameData?.ageRatings && fullGameData.ageRatings.length > 0) {
+    gameMetadata.ageRatings = fullGameData.ageRatings;
+  }
+  
+  if (fullGameData?.developers && fullGameData.developers.length > 0) {
+    gameMetadata.developers = fullGameData.developers;
+  }
+  
+  if (fullGameData?.publishers && fullGameData.publishers.length > 0) {
+    gameMetadata.publishers = fullGameData.publishers;
+  }
+  
+  if (fullGameData?.franchise) {
+    gameMetadata.franchise = fullGameData.franchise;
+  }
+  
+  if (fullGameData?.collection) {
+    gameMetadata.collection = fullGameData.collection;
+  }
+  
+  if (fullGameData?.screenshots && fullGameData.screenshots.length > 0) {
+    gameMetadata.screenshots = fullGameData.screenshots;
+  }
+  
+  if (fullGameData?.videos && fullGameData.videos.length > 0) {
+    gameMetadata.videos = fullGameData.videos;
+  }
+  
+  if (fullGameData?.gameEngines && fullGameData.gameEngines.length > 0) {
+    gameMetadata.gameEngines = fullGameData.gameEngines;
+  }
+  
+  if (fullGameData?.keywords && fullGameData.keywords.length > 0) {
+    gameMetadata.keywords = fullGameData.keywords;
+  }
+  
+  if (fullGameData?.alternativeNames && fullGameData.alternativeNames.length > 0) {
+    gameMetadata.alternativeNames = fullGameData.alternativeNames;
+  }
+  
+  if (fullGameData?.similarGames && fullGameData.similarGames.length > 0) {
+    gameMetadata.similarGames = fullGameData.similarGames;
+  }
   
   // Add executables array if we have executables
   if (executableLabels.length > 0) {

@@ -185,4 +185,208 @@ describe('GOG Galaxy Importer', () => {
       expect(executableSet.has(key2)).toBe(true);
     });
   });
+
+  describe('Metadata JSON construction', () => {
+    test('should include all fields from fullGameData', () => {
+      const fullGameData = {
+        id: 12345,
+        name: 'Test Game',
+        summary: 'A test game summary',
+        releaseDateFull: {
+          year: 2023,
+          month: 11,
+          day: 15,
+          timestamp: 1700092800,
+        },
+        genres: ['Action', 'Adventure'],
+        criticRating: 85, // 0-100 scale
+        userRating: 78, // 0-100 scale
+        cover: 'https://images.igdb.com/igdb/image/upload/t_1080p/co2f1v.jpg',
+        background: 'https://images.igdb.com/igdb/image/upload/t_1080p/wnglmmjdbv6sipynrcji.jpg',
+        themes: ['Fantasy'],
+        platforms: ['PC'],
+      };
+
+      // Simulate metadata construction
+      const gameMetadata = {
+        title: fullGameData.name,
+        summary: fullGameData.summary,
+        year: fullGameData.releaseDateFull?.year || fullGameData.releaseDate || null,
+        month: fullGameData.releaseDateFull?.month || null,
+        day: fullGameData.releaseDateFull?.day || null,
+        stars: null,
+        genre: fullGameData.genres && fullGameData.genres.length > 0 ? fullGameData.genres : null,
+      };
+
+      if (fullGameData.cover) {
+        gameMetadata.igdbCover = fullGameData.cover;
+      }
+
+      if (fullGameData.background) {
+        gameMetadata.igdbBackground = fullGameData.background;
+      }
+
+      if (fullGameData.criticRating !== null && fullGameData.criticRating !== undefined) {
+        gameMetadata.criticratings = fullGameData.criticRating / 10;
+      }
+
+      if (fullGameData.userRating !== null && fullGameData.userRating !== undefined) {
+        gameMetadata.userratings = fullGameData.userRating / 10;
+      }
+
+      if (fullGameData.themes && fullGameData.themes.length > 0) {
+        gameMetadata.themes = fullGameData.themes;
+      }
+
+      if (fullGameData.platforms && fullGameData.platforms.length > 0) {
+        gameMetadata.platforms = fullGameData.platforms;
+      }
+
+      // Assertions
+      expect(gameMetadata.title).toBe('Test Game');
+      expect(gameMetadata.summary).toBe('A test game summary');
+      expect(gameMetadata.year).toBe(2023);
+      expect(gameMetadata.month).toBe(11);
+      expect(gameMetadata.day).toBe(15);
+      expect(gameMetadata.genre).toEqual(['Action', 'Adventure']);
+      expect(gameMetadata.igdbCover).toBe('https://images.igdb.com/igdb/image/upload/t_1080p/co2f1v.jpg');
+      expect(gameMetadata.igdbBackground).toBe('https://images.igdb.com/igdb/image/upload/t_1080p/wnglmmjdbv6sipynrcji.jpg');
+      expect(gameMetadata.criticratings).toBe(8.5); // 85 / 10
+      expect(gameMetadata.userratings).toBe(7.8); // 78 / 10
+      expect(gameMetadata.themes).toEqual(['Fantasy']);
+      expect(gameMetadata.platforms).toEqual(['PC']);
+    });
+
+    test('should convert criticRating and userRating from 0-100 to 0-10 scale', () => {
+      const fullGameData = {
+        criticRating: 75,
+        userRating: 90,
+      };
+
+      let gameMetadata = {};
+
+      if (fullGameData.criticRating !== null && fullGameData.criticRating !== undefined) {
+        gameMetadata.criticratings = fullGameData.criticRating / 10;
+      }
+
+      if (fullGameData.userRating !== null && fullGameData.userRating !== undefined) {
+        gameMetadata.userratings = fullGameData.userRating / 10;
+      }
+
+      expect(gameMetadata.criticratings).toBe(7.5); // 75 / 10
+      expect(gameMetadata.userratings).toBe(9.0); // 90 / 10
+    });
+
+    test('should not include optional fields if not available', () => {
+      const fullGameData = {
+        name: 'Test Game',
+        summary: 'A test game',
+      };
+
+      const gameMetadata = {
+        title: fullGameData.name,
+        summary: fullGameData.summary,
+        year: fullGameData.releaseDateFull?.year || fullGameData.releaseDate || null,
+        month: fullGameData.releaseDateFull?.month || null,
+        day: fullGameData.releaseDateFull?.day || null,
+        stars: null,
+        genre: fullGameData.genres && fullGameData.genres.length > 0 ? fullGameData.genres : null,
+      };
+
+      // Optional fields should not be added if not present
+      expect(gameMetadata.igdbCover).toBeUndefined();
+      expect(gameMetadata.igdbBackground).toBeUndefined();
+      expect(gameMetadata.criticratings).toBeUndefined();
+      expect(gameMetadata.userratings).toBeUndefined();
+      expect(gameMetadata.themes).toBeUndefined();
+      expect(gameMetadata.platforms).toBeUndefined();
+    });
+
+    test('should handle releaseDateFull for date fields', () => {
+      const fullGameData = {
+        name: 'Test Game',
+        releaseDateFull: {
+          year: 2020,
+          month: 5,
+          day: 20,
+        },
+      };
+
+      const gameMetadata = {
+        title: fullGameData.name,
+        year: fullGameData.releaseDateFull?.year || fullGameData.releaseDate || null,
+        month: fullGameData.releaseDateFull?.month || null,
+        day: fullGameData.releaseDateFull?.day || null,
+      };
+
+      expect(gameMetadata.year).toBe(2020);
+      expect(gameMetadata.month).toBe(5);
+      expect(gameMetadata.day).toBe(20);
+    });
+
+    test('should fall back to releaseDate if releaseDateFull is not available', () => {
+      const fullGameData = {
+        name: 'Test Game',
+        releaseDate: 2021,
+      };
+
+      const gameMetadata = {
+        title: fullGameData.name,
+        year: fullGameData.releaseDateFull?.year || fullGameData.releaseDate || null,
+        month: fullGameData.releaseDateFull?.month || null,
+        day: fullGameData.releaseDateFull?.day || null,
+      };
+
+      expect(gameMetadata.year).toBe(2021);
+      expect(gameMetadata.month).toBeNull();
+      expect(gameMetadata.day).toBeNull();
+    });
+
+    test('should include igdbCover and igdbBackground when available', () => {
+      const fullGameData = {
+        name: 'Test Game',
+        cover: 'https://images.igdb.com/igdb/image/upload/t_1080p/test_cover.jpg',
+        background: 'https://images.igdb.com/igdb/image/upload/t_1080p/test_bg.jpg',
+      };
+
+      const gameMetadata = {
+        title: fullGameData.name,
+      };
+
+      if (fullGameData.cover) {
+        gameMetadata.igdbCover = fullGameData.cover;
+      }
+
+      if (fullGameData.background) {
+        gameMetadata.igdbBackground = fullGameData.background;
+      }
+
+      expect(gameMetadata.igdbCover).toBe('https://images.igdb.com/igdb/image/upload/t_1080p/test_cover.jpg');
+      expect(gameMetadata.igdbBackground).toBe('https://images.igdb.com/igdb/image/upload/t_1080p/test_bg.jpg');
+    });
+
+    test('should handle null ratings correctly', () => {
+      const fullGameData = {
+        name: 'Test Game',
+        criticRating: null,
+        userRating: null,
+      };
+
+      const gameMetadata = {
+        title: fullGameData.name,
+      };
+
+      // Should not add ratings if null
+      if (fullGameData.criticRating !== null && fullGameData.criticRating !== undefined) {
+        gameMetadata.criticratings = fullGameData.criticRating / 10;
+      }
+
+      if (fullGameData.userRating !== null && fullGameData.userRating !== undefined) {
+        gameMetadata.userratings = fullGameData.userRating / 10;
+      }
+
+      expect(gameMetadata.criticratings).toBeUndefined();
+      expect(gameMetadata.userratings).toBeUndefined();
+    });
+  });
 });

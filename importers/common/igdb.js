@@ -5,6 +5,73 @@ import http from 'http';
 import { URL } from 'url';
 
 /**
+ * Get full game details from MyHomeGames server
+ * @param {number} gameId - IGDB game ID
+ * @param {string} serverUrl - MyHomeGames server URL (e.g., http://localhost:3000)
+ * @param {string} apiToken - API token for authentication
+ * @param {string} twitchClientId - Twitch Client ID (for IGDB)
+ * @param {string} twitchClientSecret - Twitch Client Secret (for IGDB)
+ * @returns {Promise<Object|null>} - Full game object or null if not found
+ */
+export async function getGameDetailsFromServer(gameId, serverUrl, apiToken, twitchClientId, twitchClientSecret) {
+  return new Promise((resolve, reject) => {
+    try {
+      const url = new URL(`${serverUrl}/igdb/game/${gameId}`);
+      url.searchParams.set('clientId', twitchClientId);
+      url.searchParams.set('clientSecret', twitchClientSecret);
+
+      const isHttps = url.protocol === 'https:';
+      const httpModule = isHttps ? https : http;
+
+      const options = {
+        hostname: url.hostname,
+        port: url.port || (isHttps ? 443 : 80),
+        path: url.pathname + url.search,
+        method: 'GET',
+        headers: {
+          'X-Auth-Token': apiToken,
+          'Content-Type': 'application/json',
+        },
+      };
+      
+      // Accept self-signed certificates for HTTPS (for development)
+      if (isHttps) {
+        options.rejectUnauthorized = false;
+      }
+
+      const req = httpModule.request(options, (res) => {
+        let data = '';
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        res.on('end', () => {
+          try {
+            if (res.statusCode !== 200) {
+              const error = JSON.parse(data);
+              reject(new Error(`Server error: ${error.error || res.statusMessage}`));
+              return;
+            }
+
+            const gameData = JSON.parse(data);
+            resolve(gameData);
+          } catch (e) {
+            reject(new Error(`Failed to parse server response: ${e.message}`));
+          }
+        });
+      });
+
+      req.on('error', (err) => {
+        reject(new Error(`Request failed: ${err.message}`));
+      });
+
+      req.end();
+    } catch (e) {
+      reject(new Error(`Invalid server URL: ${e.message}`));
+    }
+  });
+}
+
+/**
  * Search game on MyHomeGames server (which searches IGDB)
  * @param {string} title - Game title to search
  * @param {string} serverUrl - MyHomeGames server URL (e.g., http://localhost:3000)
