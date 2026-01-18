@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node cli.js",
-    "import": "node cli.js"
+    "import": "node cli.js",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
   },
   "bin": {
     "myhomegames-importer": "./cli.js"
@@ -17,5 +18,8 @@
   "dependencies": {
     "better-sqlite3": "^11.0.0",
     "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
   }
 }

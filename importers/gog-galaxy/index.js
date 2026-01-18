@@ -28,8 +28,6 @@ function sanitizeExecutableName(name) {
  * @param {string} twitchClientSecret - Twitch Client Secret
  */
 async function importGame(gameTitle, releaseKey, executables, metadataPath, galaxyImagesPath, serverUrl, apiToken, twitchClientId, twitchClientSecret) {
-  console.log(`\nProcessing game: ${gameTitle}`);
-  
   // Search game on MyHomeGames server
   console.log(`  Searching on MyHomeGames server...`);
   const igdbGame = await searchGameOnServer(gameTitle, serverUrl, apiToken, twitchClientId, twitchClientSecret);
@@ -55,8 +53,10 @@ async function importGame(gameTitle, releaseKey, executables, metadataPath, gala
     
     // Clean label: remove .sh or .bat extension if present
     let label = exec.label || 'script';
-    if (label.endsWith('.sh') || label.endsWith('.bat')) {
-      label = label.slice(0, -4); // Remove last 4 characters (.sh or .bat)
+    if (label.endsWith('.bat')) {
+      label = label.slice(0, -4); // Remove last 4 characters (.bat)
+    } else if (label.endsWith('.sh')) {
+      label = label.slice(0, -3); // Remove last 3 characters (.sh)
     }
     
     let executableName = sanitizeExecutableName(label);
@@ -357,22 +357,40 @@ export async function importFromGOGGalaxy(config) {
     const gameReleaseKeyMap = new Map();
     const processedTitles = new Set(); // Track processed titles (normalized) to avoid duplicates
     
+    // Filter out duplicates before processing to get accurate count
+    const gamesToProcess = [];
+    for (const [releaseKey, gameData] of gamesByReleaseKey) {
+      const normalizedTitle = gameData.title.toLowerCase().trim();
+      if (!processedTitles.has(normalizedTitle)) {
+        processedTitles.add(normalizedTitle);
+        gamesToProcess.push([releaseKey, gameData]);
+      }
+    }
+    
+    const totalGames = gamesToProcess.length;
+    processedTitles.clear(); // Reset for actual processing
+    
     // Import each game (processing all executables together)
-    console.log('=== Importing Games ===');
+    console.log(`=== Importing Games (${totalGames} games) ===`);
     let successCount = 0;
     let skipCount = 0;
+    let currentIndex = 0;
     
-    for (const [releaseKey, gameData] of gamesByReleaseKey) {
+    for (const [releaseKey, gameData] of gamesToProcess) {
+      currentIndex++;
+      
       // Normalize title for duplicate detection (lowercase, trim)
       const normalizedTitle = gameData.title.toLowerCase().trim();
       
       // Skip if this title was already processed
       if (processedTitles.has(normalizedTitle)) {
-        console.log(`  Skipping duplicate title: ${gameData.title} (releaseKey: ${releaseKey})`);
+        console.log(`  [${currentIndex}/${totalGames}] Skipping duplicate title: ${gameData.title} (releaseKey: ${releaseKey})`);
         continue;
       }
       
       processedTitles.add(normalizedTitle);
+      
+      console.log(`[${currentIndex}/${totalGames}] Processing game: ${gameData.title}`);
       
       try {
         const gameId = await importGame(
@@ -394,7 +412,7 @@ export async function importFromGOGGalaxy(config) {
           skipCount++;
         }
       } catch (error) {
-        console.error(`  Error importing ${gameData.title}:`, error.message);
+        console.error(`  [${currentIndex}/${totalGames}] Error importing ${gameData.title}:`, error.message);
         skipCount++;
       }
     }
