@@ -25,8 +25,9 @@ function sanitizeExecutableName(name) {
  * @param {string} apiToken - API token
  * @param {string} twitchClientId - Twitch Client ID
  * @param {string} twitchClientSecret - Twitch Client Secret
+ * @param {number|null} myRating - My rating from GOG Galaxy (0-5 scale, will be converted to 0-10)
  */
-async function importGame(gameTitle, releaseKey, executables, metadataPath, galaxyImagesPath, serverUrl, apiToken, twitchClientId, twitchClientSecret) {
+async function importGame(gameTitle, releaseKey, executables, metadataPath, galaxyImagesPath, serverUrl, apiToken, twitchClientId, twitchClientSecret, myRating = null) {
   // Search game on MyHomeGames server
   console.log(`  Searching on MyHomeGames server...`);
   const igdbGame = await searchGameOnServer(gameTitle, serverUrl, apiToken, twitchClientId, twitchClientSecret);
@@ -50,6 +51,9 @@ async function importGame(gameTitle, releaseKey, executables, metadataPath, gala
   
   // Prepare game data for API
   const releaseDate = fullGameData?.releaseDate || null;
+  // Convert myRating from 0-5 scale to 0-10 scale (stars)
+  const stars = myRating !== null && myRating !== undefined ? myRating * 2 : null;
+  
   const gameData = {
     igdbId: gameId,
     name: fullGameData?.name || igdbGame.name,
@@ -60,6 +64,7 @@ async function importGame(gameTitle, releaseKey, executables, metadataPath, gala
     genres: fullGameData?.genres || null,
     criticRating: fullGameData?.criticRating !== null && fullGameData?.criticRating !== undefined ? fullGameData.criticRating : null,
     userRating: fullGameData?.userRating !== null && fullGameData?.userRating !== undefined ? fullGameData.userRating : null,
+    stars: stars,
     themes: fullGameData?.themes || null,
     platforms: fullGameData?.platforms || null,
     gameModes: fullGameData?.gameModes || null,
@@ -188,20 +193,23 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
     console.warn(`  Warning: Failed to get existing collections: ${error.message}`);
   }
   
-  // Group games by tag
+  // Group games by tag with release date info
   const tagGamesMap = new Map();
   for (const row of tagsData) {
     if (!tagGamesMap.has(row.tag)) {
       tagGamesMap.set(row.tag, []);
     }
-    tagGamesMap.get(row.tag).push(row.releaseKey);
+    tagGamesMap.get(row.tag).push({
+      releaseKey: row.releaseKey,
+      releaseDate: row.releaseDate || null
+    });
   }
   
   // Cache for title -> IGDB ID lookups to avoid duplicate server calls
   const titleToIgdbIdCache = new Map();
   
   let importedCount = 0;
-  for (const [tag, releaseKeys] of tagGamesMap) {
+  for (const [tag, releaseKeysWithDate] of tagGamesMap) {
     // Check if collection already exists
     if (existingCollections.has(tag.toLowerCase())) {
       console.log(`  Skipping existing collection: ${tag}`);
@@ -209,15 +217,19 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
     }
     
     // Map releaseKeys to game IDs using gameReleaseKeyMap (games imported in this session)
+    // Use the order from SQL query (ORDER BY urt.tag, releaseDate)
+    const gameIdsWithDates = []; // Track gameId with release date for logging
     const gameIds = [];
     let missingGameCount = 0;
     const missingGames = []; // Track missing games with details
     
-    for (const releaseKey of releaseKeys) {
+    for (const { releaseKey, releaseDate } of releaseKeysWithDate) {
       // Try to get from gameReleaseKeyMap first (for games imported in this session)
       const gameId = gameReleaseKeyMap.get(releaseKey);
       if (gameId) {
-        gameIds.push(typeof gameId === 'number' ? gameId : parseInt(gameId, 10));
+        const finalGameId = typeof gameId === 'number' ? gameId : parseInt(gameId, 10);
+        gameIds.push(finalGameId);
+        gameIdsWithDates.push({ gameId: finalGameId, releaseDate: releaseDate || null });
       } else {
         // If not found in gameReleaseKeyMap, try to find by IGDB ID in filesystem
         // First, try to get IGDB ID from the mapping (if available)
@@ -261,6 +273,7 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
                     const fsGameId = parseInt(searchIgdbId, 10);
                     if (!isNaN(fsGameId)) {
                       gameIds.push(fsGameId);
+                      gameIdsWithDates.push({ gameId: fsGameId, releaseDate: releaseDate || null });
                       found = true;
                     }
                   }
@@ -282,6 +295,7 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
                           const fsGameId = parseInt(gameDir.name, 10);
                           if (!isNaN(fsGameId)) {
                             gameIds.push(fsGameId);
+                            gameIdsWithDates.push({ gameId: fsGameId, releaseDate: releaseDate || null });
                             found = true;
                             break;
                           }
@@ -290,6 +304,7 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
                           const fsGameId = parseInt(gameDir.name, 10);
                           if (!isNaN(fsGameId)) {
                             gameIds.push(fsGameId);
+                            gameIdsWithDates.push({ gameId: fsGameId, releaseDate: releaseDate || null });
                             found = true;
                             break;
                           }
@@ -340,6 +355,7 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
                 const fsGameId = parseInt(searchIgdbId, 10);
                 if (!isNaN(fsGameId)) {
                   gameIds.push(fsGameId);
+                  gameIdsWithDates.push({ gameId: fsGameId, releaseDate: releaseDate || null });
                   found = true;
                 }
               }
@@ -373,10 +389,32 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
     }
     
     // Remove duplicate game IDs before creating collection
-    const uniqueGameIds = [...new Set(gameIds)];
+    // Also deduplicate gameIdsWithDates keeping first occurrence (to match uniqueGameIds order)
+    const seenGameIds = new Set();
+    const uniqueGameIds = [];
+    const uniqueGameIdsWithDates = [];
+    
+    for (let i = 0; i < gameIds.length; i++) {
+      const gameId = gameIds[i];
+      if (!seenGameIds.has(gameId)) {
+        seenGameIds.add(gameId);
+        uniqueGameIds.push(gameId);
+        uniqueGameIdsWithDates.push(gameIdsWithDates[i]);
+      }
+    }
+    
     if (uniqueGameIds.length !== gameIds.length) {
       const duplicateCount = gameIds.length - uniqueGameIds.length;
       console.log(`    Note: Removed ${duplicateCount} duplicate game ID(s) from collection`);
+    }
+    
+    // Log games with IGDB ID and release date
+    if (uniqueGameIdsWithDates.length > 0) {
+      console.log(`    Games in collection (${uniqueGameIdsWithDates.length}):`);
+      for (const { gameId, releaseDate } of uniqueGameIdsWithDates) {
+        const releaseDateStr = releaseDate ? new Date(parseInt(releaseDate, 10) * 1000).toISOString().split('T')[0] : 'N/A';
+        console.log(`      - IGDB ID: ${gameId}, Release Date: ${releaseDateStr} (timestamp: ${releaseDate || 'null'})`);
+      }
     }
     
     // Create collection via API
@@ -464,15 +502,17 @@ export async function importFromGOGGalaxy(config) {
       console.log(`Filtering by search term: "${search}"\n`);
     }
     const gamesQuery = db.prepare(`
-      SELECT DISTINCT
+      SELECT 
         gp.releaseKey,
         json_extract(gp.value, '$.title') as title,
         ptlp.executablePath,
-        ptlp.label
+        ptlp.label,
+        MAX(json_extract(gp102.value, '$.myRating')) as myRating
       FROM GamePieces gp
       LEFT JOIN LibraryReleases lr ON gp.releaseKey = lr.releaseKey
       LEFT JOIN PlayTasks pt ON gp.releaseKey = pt.gameReleaseKey
       LEFT JOIN PlayTaskLaunchParameters ptlp ON pt.id = ptlp.playTaskId
+      LEFT JOIN GamePieces gp102 ON gp.releaseKey = gp102.releaseKey AND gp102.gamePieceTypeId = 102
       WHERE gp.value IS NOT NULL 
         AND gp.value != ''
         AND gp.releaseKey IS NOT NULL
@@ -480,6 +520,7 @@ export async function importFromGOGGalaxy(config) {
         AND json_extract(gp.value, '$.title') IS NOT NULL
         AND json_extract(gp.value, '$.title') != ''
         ${search ? `AND json_extract(gp.value, '$.title') LIKE '%' || ? || '%'` : ''}
+      GROUP BY gp.releaseKey, json_extract(gp.value, '$.title'), ptlp.executablePath, ptlp.label
       ORDER BY title
       ${limit ? `LIMIT ${limit}` : ''}
     `);
@@ -499,8 +540,15 @@ export async function importFromGOGGalaxy(config) {
         gamesByReleaseKey.set(game.releaseKey, {
           title: game.title,
           executables: [],
-          executableSet: new Set() // Track unique executables to avoid duplicates
+          executableSet: new Set(), // Track unique executables to avoid duplicates
+          myRating: game.myRating || null
         });
+      } else {
+        // If myRating is not set yet and this row has it, update it
+        const gameData = gamesByReleaseKey.get(game.releaseKey);
+        if (!gameData.myRating && game.myRating) {
+          gameData.myRating = game.myRating;
+        }
       }
       
       // Add executable if it exists and not already added
@@ -576,7 +624,8 @@ export async function importFromGOGGalaxy(config) {
           serverUrl,
           apiToken,
           twitchClientId,
-          twitchClientSecret
+          twitchClientSecret,
+          gameData.myRating
         );
         
         if (result && result.gameId) {
@@ -601,13 +650,19 @@ export async function importFromGOGGalaxy(config) {
       
       // Import collections (unless games-only mode)
       if (!gamesOnly) {
-        // Get games for each tag
+        // Get games for each tag with release date from GamePieces type 82
+        // Priority to rows with releaseDate (non-null values)
         const gamesByTagQuery = db.prepare(`
-          SELECT DISTINCT urt.tag, urt.releaseKey
+          SELECT 
+            urt.tag, 
+            urt.releaseKey,
+            MAX(json_extract(gp82.value, '$.releaseDate')) as releaseDate
           FROM UserReleaseTags urt
+          LEFT JOIN GamePieces gp82 ON urt.releaseKey = gp82.releaseKey AND gp82.gamePieceTypeId = 82
           WHERE urt.tag IS NOT NULL AND urt.tag != ''
             AND urt.releaseKey IS NOT NULL
-          ORDER BY urt.tag, urt.releaseKey
+          GROUP BY urt.tag, urt.releaseKey
+          ORDER BY urt.tag, releaseDate
         `);
         const tagsData = gamesByTagQuery.all();
         
@@ -675,13 +730,19 @@ export async function importFromGOGGalaxy(config) {
         delete gameData.executableSet;
       }
       
-      // Get games for each tag
+      // Get games for each tag with release date from GamePieces type 82
+      // Priority to rows with releaseDate (non-null values)
       const gamesByTagQuery = db.prepare(`
-        SELECT DISTINCT urt.tag, urt.releaseKey
+        SELECT 
+          urt.tag, 
+          urt.releaseKey,
+          MAX(json_extract(gp82.value, '$.releaseDate')) as releaseDate
         FROM UserReleaseTags urt
+        LEFT JOIN GamePieces gp82 ON urt.releaseKey = gp82.releaseKey AND gp82.gamePieceTypeId = 82
         WHERE urt.tag IS NOT NULL AND urt.tag != ''
           AND urt.releaseKey IS NOT NULL
-        ORDER BY urt.tag, urt.releaseKey
+        GROUP BY urt.tag, urt.releaseKey
+        ORDER BY urt.tag, releaseDate
       `);
       const tagsData = gamesByTagQuery.all();
       
