@@ -372,17 +372,24 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
       }
     }
     
+    // Remove duplicate game IDs before creating collection
+    const uniqueGameIds = [...new Set(gameIds)];
+    if (uniqueGameIds.length !== gameIds.length) {
+      const duplicateCount = gameIds.length - uniqueGameIds.length;
+      console.log(`    Note: Removed ${duplicateCount} duplicate game ID(s) from collection`);
+    }
+    
     // Create collection via API
     try {
       const response = await createCollectionViaAPI(tag, '', serverUrl, apiToken);
       const collectionId = response.collection?.id;
       
-      if (collectionId && gameIds.length > 0) {
-        // Update collection games via API
-        await updateCollectionGamesViaAPI(collectionId, gameIds, serverUrl, apiToken);
+      if (collectionId && uniqueGameIds.length > 0) {
+        // Update collection games via API (with deduplicated IDs)
+        await updateCollectionGamesViaAPI(collectionId, uniqueGameIds, serverUrl, apiToken);
       }
       
-      console.log(`  Created collection: ${tag} (ID: ${collectionId}, ${gameIds.length} games)`);
+      console.log(`  Created collection: ${tag} (ID: ${collectionId}, ${uniqueGameIds.length} games)`);
       importedCount++;
     } catch (error) {
       // If collection already exists (409), that's fine, skip it
