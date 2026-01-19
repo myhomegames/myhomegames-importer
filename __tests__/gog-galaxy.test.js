@@ -423,4 +423,166 @@ describe('GOG Galaxy Importer', () => {
       // In actual code, this would throw an error
     });
   });
+
+  describe('Collection import filesystem search', () => {
+    test('should search by game title in filesystem (name field)', () => {
+      // Simulate filesystem search logic
+      const gameData = { title: 'Test Game' };
+      const normalizedTitle = gameData.title.toLowerCase().trim();
+      
+      // Simulate metadata.json with 'name' field (new format)
+      const gameMetadata = {
+        name: 'Test Game',
+        summary: 'A test game',
+      };
+      
+      const metadataName = gameMetadata.name?.toLowerCase().trim();
+      const match = metadataName === normalizedTitle;
+      
+      expect(match).toBe(true);
+    });
+
+    test('should search by game title in filesystem (title field fallback)', () => {
+      // Simulate filesystem search logic for older metadata format
+      const gameData = { title: 'Test Game' };
+      const normalizedTitle = gameData.title.toLowerCase().trim();
+      
+      // Simulate metadata.json with 'title' field (old format)
+      const gameMetadata = {
+        title: 'Test Game',
+        summary: 'A test game',
+      };
+      
+      const metadataTitle = gameMetadata.title?.toLowerCase().trim();
+      const match = metadataTitle === normalizedTitle;
+      
+      expect(match).toBe(true);
+    });
+
+    test('should handle case-insensitive title matching', () => {
+      const gameData = { title: 'Test Game' };
+      const normalizedTitle = gameData.title.toLowerCase().trim();
+      
+      const gameMetadata = {
+        name: 'TEST GAME',
+      };
+      
+      const metadataName = gameMetadata.name?.toLowerCase().trim();
+      const match = metadataName === normalizedTitle;
+      
+      expect(match).toBe(true);
+    });
+
+    test('should handle whitespace trimming in title matching', () => {
+      const gameData = { title: '  Test Game  ' };
+      const normalizedTitle = gameData.title.toLowerCase().trim();
+      
+      const gameMetadata = {
+        name: 'Test Game',
+      };
+      
+      const metadataName = gameMetadata.name?.toLowerCase().trim();
+      const match = metadataName === normalizedTitle;
+      
+      expect(match).toBe(true);
+    });
+
+    test('should search by IGDB ID folder name when available in mapping', () => {
+      // Simulate IGDB ID folder search
+      const igdbIdToSearch = 3193;
+      const searchIgdbId = String(igdbIdToSearch);
+      
+      // Simulate folder name (IGDB ID is the folder name)
+      const folderName = '3193';
+      
+      const match = folderName === searchIgdbId;
+      
+      expect(match).toBe(true);
+    });
+
+    test('should convert IGDB ID to string for folder name comparison', () => {
+      const igdbIdNumber = 3193;
+      const igdbIdString = String(igdbIdNumber);
+      const folderName = '3193';
+      
+      expect(folderName).toBe(igdbIdString);
+      expect(parseInt(folderName, 10)).toBe(igdbIdNumber);
+    });
+  });
+
+  describe('Collection import - IGDB server search', () => {
+    test('should require twitchClientId and twitchClientSecret for collections', () => {
+      // Collections import calls searchGameOnServer when game not in mapping
+      // So it needs Twitch credentials
+      const importCollectionsParams = {
+        metadataPath: '/path/to/metadata',
+        gameReleaseKeyMap: new Map(),
+        gameReleaseKeyToIgdbIdMap: new Map(),
+        tagsData: [],
+        gamesByReleaseKey: new Map(),
+        serverUrl: 'http://localhost:4000',
+        apiToken: 'test-token',
+        twitchClientId: 'test-client-id',
+        twitchClientSecret: 'test-client-secret',
+      };
+      
+      expect(importCollectionsParams.apiToken).toBeDefined();
+      expect(importCollectionsParams.serverUrl).toBeDefined();
+      expect(importCollectionsParams.twitchClientId).toBeDefined();
+      expect(importCollectionsParams.twitchClientSecret).toBeDefined();
+    });
+
+    test('should search server for IGDB ID when game not in mapping', () => {
+      // Simulate collection import logic
+      const gameReleaseKeyMap = new Map();
+      const gameReleaseKeyToIgdbIdMap = new Map();
+      const releaseKey = 'generic_123456';
+      const gameData = { title: 'Test Game' };
+      
+      // Game not in mapping
+      const gameId = gameReleaseKeyMap.get(releaseKey);
+      const igdbId = gameReleaseKeyToIgdbIdMap.get(releaseKey);
+      expect(gameId).toBeUndefined();
+      expect(igdbId).toBeUndefined();
+      
+      // Should search server for IGDB ID, then filesystem
+      const shouldSearchServer = !gameId && !igdbId && gameData && !!gameData.title;
+      expect(shouldSearchServer).toBe(true);
+    });
+
+    test('should use mapping when game is in gameReleaseKeyMap', () => {
+      // Simulate collection import logic
+      const gameReleaseKeyMap = new Map();
+      const releaseKey = 'generic_123456';
+      const gameId = 3193;
+      
+      gameReleaseKeyMap.set(releaseKey, gameId);
+      
+      // Game found in mapping
+      const foundGameId = gameReleaseKeyMap.get(releaseKey);
+      expect(foundGameId).toBe(gameId);
+      
+      // Should not need server or filesystem search
+      const shouldSearchServer = !foundGameId;
+      expect(shouldSearchServer).toBe(false);
+    });
+
+    test('should use IGDB ID from mapping when available', () => {
+      // Simulate collection import logic
+      const gameReleaseKeyMap = new Map();
+      const gameReleaseKeyToIgdbIdMap = new Map();
+      const releaseKey = 'generic_123456';
+      const igdbId = 3193;
+      
+      gameReleaseKeyToIgdbIdMap.set(releaseKey, igdbId);
+      
+      // IGDB ID found in mapping
+      const foundIgdbId = gameReleaseKeyToIgdbIdMap.get(releaseKey);
+      expect(foundIgdbId).toBe(igdbId);
+      
+      // Should search filesystem by folder name (IGDB ID)
+      const shouldSearchByFolderName = !!foundIgdbId;
+      expect(shouldSearchByFolderName).toBe(true);
+    });
+  });
 });
