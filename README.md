@@ -187,7 +187,7 @@ The GOG Galaxy importer queries the following database tables:
 - The importer uses the MyHomeGames server API instead of calling IGDB directly
 - Collections reference games by IGDB ID (not by releaseKey)
 - The importer filters label extensions (`.sh` and `.bat`) from executable labels
-- Duplicate detection is based on game title (normalized, case-insensitive)
+- Duplicate detection is based on releaseKey (each releaseKey is processed only once)
 - Games already present in the metadata path are skipped (based on IGDB ID)
 - **Authentication:** The API token is automatically loaded from `METADATA_PATH/tokens.json`. You must login via the web interface first. The token is never read from environment variables or `.env` file for security reasons.
 

@@ -103,47 +103,6 @@ describe('GOG Galaxy Importer', () => {
     });
   });
 
-  describe('Title normalization for duplicate detection', () => {
-    test('should normalize title to lowercase and trim', () => {
-      const titles = [
-        { input: 'Test Game', normalized: 'test game' },
-        { input: '  Test Game  ', normalized: 'test game' },
-        { input: 'TEST GAME', normalized: 'test game' },
-        { input: 'Test   Game', normalized: 'test   game' }, // Multiple spaces preserved
-      ];
-
-      titles.forEach(({ input, normalized }) => {
-        const result = input.toLowerCase().trim();
-        expect(result).toBe(normalized);
-      });
-    });
-
-    test('should detect duplicate titles regardless of case', () => {
-      const processedTitles = new Set();
-      
-      const title1 = 'Test Game';
-      const normalized1 = title1.toLowerCase().trim();
-      processedTitles.add(normalized1);
-      
-      const title2 = 'TEST GAME';
-      const normalized2 = title2.toLowerCase().trim();
-      
-      expect(processedTitles.has(normalized2)).toBe(true);
-    });
-
-    test('should detect duplicate titles with different whitespace', () => {
-      const processedTitles = new Set();
-      
-      const title1 = 'Test Game';
-      const normalized1 = title1.toLowerCase().trim();
-      processedTitles.add(normalized1);
-      
-      const title2 = '  Test Game  ';
-      const normalized2 = title2.toLowerCase().trim();
-      
-      expect(processedTitles.has(normalized2)).toBe(true);
-    });
-  });
 
   describe('Executable deduplication', () => {
     test('should track unique executables by path and label', () => {
@@ -530,6 +489,88 @@ describe('GOG Galaxy Importer', () => {
       expect(importCollectionsParams.serverUrl).toBeDefined();
       expect(importCollectionsParams.twitchClientId).toBeDefined();
       expect(importCollectionsParams.twitchClientSecret).toBeDefined();
+    });
+
+    test('should select first non-imported game from search results', () => {
+      // Simulate searchGameOnServer returning multiple games
+      const igdbGames = [
+        { id: 1001, name: 'Game 1' },
+        { id: 1002, name: 'Game 2' },
+        { id: 1003, name: 'Game 3' },
+      ];
+      
+      // Simulate filesystem check - game 1001 and 1002 already exist
+      const existingGames = new Set([1001, 1002]);
+      
+      // Find first game that is not already imported
+      let selectedGame = null;
+      for (const game of igdbGames) {
+        if (!existingGames.has(game.id)) {
+          selectedGame = game;
+          break;
+        }
+      }
+      
+      expect(selectedGame).not.toBeNull();
+      expect(selectedGame.id).toBe(1003);
+      expect(selectedGame.name).toBe('Game 3');
+    });
+
+    test('should skip game if all search results are already imported', () => {
+      // Simulate searchGameOnServer returning multiple games
+      const igdbGames = [
+        { id: 1001, name: 'Game 1' },
+        { id: 1002, name: 'Game 2' },
+        { id: 1003, name: 'Game 3' },
+      ];
+      
+      // Simulate filesystem check - all games already exist
+      const existingGames = new Set([1001, 1002, 1003]);
+      
+      // Find first game that is not already imported
+      let selectedGame = null;
+      for (const game of igdbGames) {
+        if (!existingGames.has(game.id)) {
+          selectedGame = game;
+          break;
+        }
+      }
+      
+      expect(selectedGame).toBeNull();
+    });
+
+    test('should select first game if none are imported', () => {
+      // Simulate searchGameOnServer returning multiple games
+      const igdbGames = [
+        { id: 1001, name: 'Game 1' },
+        { id: 1002, name: 'Game 2' },
+        { id: 1003, name: 'Game 3' },
+      ];
+      
+      // Simulate filesystem check - no games exist
+      const existingGames = new Set();
+      
+      // Find first game that is not already imported
+      let selectedGame = null;
+      for (const game of igdbGames) {
+        if (!existingGames.has(game.id)) {
+          selectedGame = game;
+          break;
+        }
+      }
+      
+      expect(selectedGame).not.toBeNull();
+      expect(selectedGame.id).toBe(1001);
+      expect(selectedGame.name).toBe('Game 1');
+    });
+
+    test('should handle empty search results', () => {
+      const igdbGames = [];
+      
+      if (!igdbGames || igdbGames.length === 0) {
+        // Should skip game
+        expect(igdbGames.length).toBe(0);
+      }
     });
 
     test('should search server for IGDB ID when game not in mapping', () => {

@@ -80,7 +80,7 @@ export async function getGameDetailsFromServer(gameId, serverUrl, apiToken, twit
  * @param {string} apiToken - API token for authentication
  * @param {string} twitchClientId - Twitch Client ID (for IGDB)
  * @param {string} twitchClientSecret - Twitch Client Secret (for IGDB)
- * @returns {Promise<Object|null>} - Game object with id and name, or null if not found
+ * @returns {Promise<Array<Object>>} - Array of game objects with id and name, or empty array if not found
  */
 export async function searchGameOnServer(title, serverUrl, apiToken, twitchClientId, twitchClientSecret) {
   return new Promise((resolve, reject) => {
@@ -124,13 +124,13 @@ export async function searchGameOnServer(title, serverUrl, apiToken, twitchClien
 
             const response = JSON.parse(data);
             if (response.games && response.games.length > 0) {
-              // Return first game in format expected by importer (id and name)
-              resolve({
-                id: response.games[0].id,
-                name: response.games[0].name,
-              });
+              // Return all games in format expected by importer (id and name)
+              resolve(response.games.map(game => ({
+                id: game.id,
+                name: game.name,
+              })));
             } else {
-              resolve(null);
+              resolve([]);
             }
           } catch (e) {
             reject(new Error(`Failed to parse server response: ${e.message}`));
