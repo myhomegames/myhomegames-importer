@@ -16,7 +16,7 @@ function sanitizeExecutableName(name) {
 
 /**
  * Import a single game
- * @param {string} gameTitle - Game title
+ * @param {string|Array<string>} gameTitles - Game title(s) to try (can be array for multiple titles)
  * @param {string} releaseKey - GOG Galaxy release key
  * @param {Array<{path: string, label: string|null}>} executables - Array of executables with path and label
  * @param {string} metadataPath - Path to metadata directory
@@ -27,13 +27,52 @@ function sanitizeExecutableName(name) {
  * @param {string} twitchClientSecret - Twitch Client Secret
  * @param {number|null} myRating - My rating from GOG Galaxy (0-5 scale, will be converted to 0-10)
  */
-async function importGame(gameTitle, releaseKey, executables, metadataPath, galaxyImagesPath, serverUrl, apiToken, twitchClientId, twitchClientSecret, myRating = null) {
-  // Search game on MyHomeGames server
+async function importGame(gameTitles, releaseKey, executables, metadataPath, galaxyImagesPath, serverUrl, apiToken, twitchClientId, twitchClientSecret, myRating = null) {
+  // Normalize gameTitles to array
+  const titlesToTry = Array.isArray(gameTitles) ? gameTitles : [gameTitles];
+  const primaryTitle = titlesToTry[0]; // Use first title for logging
+  
+  // Search game on MyHomeGames server, trying each title until one succeeds
   console.log(`  Searching on MyHomeGames server...`);
-  const igdbGame = await searchGameOnServer(gameTitle, serverUrl, apiToken, twitchClientId, twitchClientSecret);
+  let igdbGames = null;
+  let usedTitle = null;
+  
+  for (const title of titlesToTry) {
+    if (titlesToTry.length > 1) {
+      console.log(`    Trying title: "${title}"`);
+    }
+    igdbGames = await searchGameOnServer(title, serverUrl, apiToken, twitchClientId, twitchClientSecret);
+    
+    if (igdbGames && igdbGames.length > 0) {
+      usedTitle = title;
+      if (titlesToTry.length > 1) {
+        console.log(`    Found results with title: "${title}"`);
+      }
+      break;
+    }
+  }
+  
+  if (!igdbGames || igdbGames.length === 0) {
+    const allTitles = titlesToTry.join('", "');
+    console.warn(`  Warning: Game not found with any title, skipping: "${allTitles}"`);
+    return null;
+  }
+  
+  // Find first game that is not already imported (check filesystem)
+  const gamesDir = path.join(metadataPath, 'content', 'games');
+  let igdbGame = null;
+  for (const game of igdbGames) {
+    const gameDirPath = path.join(gamesDir, String(game.id));
+    const gameMetadataPath = path.join(gameDirPath, 'metadata.json');
+    if (!fs.existsSync(gameMetadataPath)) {
+      igdbGame = game;
+      break;
+    }
+  }
   
   if (!igdbGame) {
-    console.warn(`  Warning: Game not found, skipping: ${gameTitle}`);
+    const allTitles = titlesToTry.join('", "');
+    console.warn(`  Warning: All search results are already imported, skipping: "${allTitles}"`);
     return null;
   }
   
@@ -243,23 +282,54 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
         let igdbIdToSearch = gameReleaseKeyToIgdbIdMap.get(releaseKey);
         const gameData = gamesByReleaseKey.get(releaseKey);
         const gameTitle = gameData?.title || 'Unknown';
+        const titlesToTry = gameData?.titles || [gameTitle]; // Use all available titles
         
-        // If no IGDB ID in mapping, try to find by searching the game title on the server
+        // If no IGDB ID in mapping, try to find by searching the game titles on the server
         // to get the IGDB ID, then search filesystem by IGDB ID
         if (!igdbIdToSearch) {
-          if (gameData && gameData.title) {
-            // First, try to search the game on the server to get its IGDB ID
-            // Use cache to avoid duplicate server calls
-            let foundIgdbId = titleToIgdbIdCache.get(gameData.title);
-            if (!foundIgdbId) {
-              try {
-                const igdbGame = await searchGameOnServer(gameData.title, serverUrl, apiToken, twitchClientId, twitchClientSecret);
-                if (igdbGame && igdbGame.id) {
-                  foundIgdbId = igdbGame.id;
-                  titleToIgdbIdCache.set(gameData.title, foundIgdbId);
+          if (gameData && titlesToTry.length > 0) {
+            // Try each title until we find an IGDB ID
+            let foundIgdbId = null;
+            let usedTitle = null;
+            
+            for (const title of titlesToTry) {
+              // First, try to search the game on the server to get its IGDB ID
+              // Use cache to avoid duplicate server calls
+              foundIgdbId = titleToIgdbIdCache.get(title);
+              if (!foundIgdbId) {
+                try {
+                  const igdbGames = await searchGameOnServer(title, serverUrl, apiToken, twitchClientId, twitchClientSecret);
+                  if (igdbGames && igdbGames.length > 0) {
+                    // Find first game that is not already imported (check filesystem)
+                    const gamesDir = path.join(metadataPath, 'content', 'games');
+                    for (const game of igdbGames) {
+                      const gameDirPath = path.join(gamesDir, String(game.id));
+                      const gameMetadataPath = path.join(gameDirPath, 'metadata.json');
+                      if (!fs.existsSync(gameMetadataPath)) {
+                        foundIgdbId = game.id;
+                        titleToIgdbIdCache.set(title, foundIgdbId);
+                        usedTitle = title;
+                        break;
+                      }
+                    }
+                    // If all games are already imported, use the first one anyway (for collection lookup)
+                    if (!foundIgdbId && igdbGames.length > 0) {
+                      foundIgdbId = igdbGames[0].id;
+                      titleToIgdbIdCache.set(title, foundIgdbId);
+                      usedTitle = title;
+                    }
+                  }
+                } catch (error) {
+                  // If search fails, continue with next title
+                  continue;
                 }
-              } catch (error) {
-                // If search fails, continue with filesystem search by name
+              } else {
+                usedTitle = title;
+                break; // Found in cache, use it
+              }
+              
+              if (foundIgdbId) {
+                break; // Found IGDB ID, stop trying other titles
               }
             }
             
@@ -287,40 +357,43 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
                 }
               }
               
-              // If not found by IGDB ID, try by name (case-insensitive, trimmed)
+              // If not found by IGDB ID, try by name (case-insensitive, trimmed) for each title
               if (!found) {
                 const gameDirs = fs.readdirSync(gamesDir, { withFileTypes: true });
-                const normalizedTitle = gameData.title.toLowerCase().trim();
-                for (const gameDir of gameDirs) {
-                  if (gameDir.isDirectory()) {
-                    const gameMetadataPath = path.join(gamesDir, gameDir.name, 'metadata.json');
-                    if (fs.existsSync(gameMetadataPath)) {
-                      try {
-                        const gameMetadata = JSON.parse(fs.readFileSync(gameMetadataPath, 'utf-8'));
-                        // Try matching by name first (new format)
-                        if (gameMetadata.name && gameMetadata.name.toLowerCase().trim() === normalizedTitle) {
-                          const fsGameId = parseInt(gameDir.name, 10);
-                          if (!isNaN(fsGameId)) {
-                            gameIds.push(fsGameId);
-                            gameIdsWithDates.push({ gameId: fsGameId, releaseDate: releaseDate || null });
-                            found = true;
-                            break;
+                for (const title of titlesToTry) {
+                  const normalizedTitle = title.toLowerCase().trim();
+                  for (const gameDir of gameDirs) {
+                    if (gameDir.isDirectory()) {
+                      const gameMetadataPath = path.join(gamesDir, gameDir.name, 'metadata.json');
+                      if (fs.existsSync(gameMetadataPath)) {
+                        try {
+                          const gameMetadata = JSON.parse(fs.readFileSync(gameMetadataPath, 'utf-8'));
+                          // Try matching by name first (new format)
+                          if (gameMetadata.name && gameMetadata.name.toLowerCase().trim() === normalizedTitle) {
+                            const fsGameId = parseInt(gameDir.name, 10);
+                            if (!isNaN(fsGameId)) {
+                              gameIds.push(fsGameId);
+                              gameIdsWithDates.push({ gameId: fsGameId, releaseDate: releaseDate || null });
+                              found = true;
+                              break;
+                            }
+                          } else if (gameMetadata.title && gameMetadata.title.toLowerCase().trim() === normalizedTitle) {
+                            // Fallback to title matching for older metadata format
+                            const fsGameId = parseInt(gameDir.name, 10);
+                            if (!isNaN(fsGameId)) {
+                              gameIds.push(fsGameId);
+                              gameIdsWithDates.push({ gameId: fsGameId, releaseDate: releaseDate || null });
+                              found = true;
+                              break;
+                            }
                           }
-                        } else if (gameMetadata.title && gameMetadata.title.toLowerCase().trim() === normalizedTitle) {
-                          // Fallback to title matching for older metadata format
-                          const fsGameId = parseInt(gameDir.name, 10);
-                          if (!isNaN(fsGameId)) {
-                            gameIds.push(fsGameId);
-                            gameIdsWithDates.push({ gameId: fsGameId, releaseDate: releaseDate || null });
-                            found = true;
-                            break;
-                          }
+                        } catch (e) {
+                          // Ignore invalid JSON
                         }
-                      } catch (e) {
-                        // Ignore invalid JSON
                       }
                     }
                   }
+                  if (found) break; // Found with this title, stop trying other titles
                 }
               }
               
@@ -514,12 +587,14 @@ export async function importFromGOGGalaxy(config) {
         json_extract(gp.value, '$.title') as title,
         ptlp.executablePath,
         ptlp.label,
-        MAX(json_extract(gp102.value, '$.myRating')) as myRating
+        MAX(json_extract(gp102.value, '$.myRating')) as myRating,
+        MAX(json_extract(gp82.value, '$.releaseDate')) as releaseDate
       FROM GamePieces gp
       LEFT JOIN LibraryReleases lr ON gp.releaseKey = lr.releaseKey
       LEFT JOIN PlayTasks pt ON gp.releaseKey = pt.gameReleaseKey
       LEFT JOIN PlayTaskLaunchParameters ptlp ON pt.id = ptlp.playTaskId
       LEFT JOIN GamePieces gp102 ON gp.releaseKey = gp102.releaseKey AND gp102.gamePieceTypeId = 102
+      LEFT JOIN GamePieces gp82 ON gp.releaseKey = gp82.releaseKey AND gp82.gamePieceTypeId = 82
       WHERE gp.value IS NOT NULL 
         AND gp.value != ''
         AND gp.releaseKey IS NOT NULL
@@ -528,7 +603,7 @@ export async function importFromGOGGalaxy(config) {
         AND json_extract(gp.value, '$.title') != ''
         ${search ? `AND json_extract(gp.value, '$.title') LIKE '%' || ? || '%'` : ''}
       GROUP BY gp.releaseKey, json_extract(gp.value, '$.title'), ptlp.executablePath, ptlp.label
-      ORDER BY title
+      ORDER BY releaseDate
       ${limit ? `LIMIT ${limit}` : ''}
     `);
     
@@ -538,6 +613,7 @@ export async function importFromGOGGalaxy(config) {
     // Group games by releaseKey to handle multiple executables per game
     // Note: It's normal to have the same releaseKey multiple times in query results
     // when a game has multiple executables - the grouping handles this correctly
+    // Also collect all unique titles for each releaseKey to try multiple search terms
     const gamesByReleaseKey = new Map();
     
     for (const game of games) {
@@ -545,14 +621,19 @@ export async function importFromGOGGalaxy(config) {
       
       if (!gamesByReleaseKey.has(game.releaseKey)) {
         gamesByReleaseKey.set(game.releaseKey, {
-          title: game.title,
+          titles: new Set([game.title]), // Track all unique titles for this releaseKey
+          title: game.title, // Keep first title for display/logging
           executables: [],
           executableSet: new Set(), // Track unique executables to avoid duplicates
           myRating: game.myRating || null
         });
       } else {
-        // If myRating is not set yet and this row has it, update it
         const gameData = gamesByReleaseKey.get(game.releaseKey);
+        // Add title to set of unique titles
+        if (game.title) {
+          gameData.titles.add(game.title);
+        }
+        // If myRating is not set yet and this row has it, update it
         if (!gameData.myRating && game.myRating) {
           gameData.myRating = game.myRating;
         }
@@ -574,8 +655,14 @@ export async function importFromGOGGalaxy(config) {
     }
     
     // Clean up executableSet (no longer needed after grouping)
+    // Convert titles Set to Array for easier use
     for (const gameData of gamesByReleaseKey.values()) {
       delete gameData.executableSet;
+      gameData.titles = Array.from(gameData.titles);
+      // Log if multiple titles found for same releaseKey
+      if (gameData.titles.length > 1) {
+        console.log(`  Note: Found ${gameData.titles.length} different titles for releaseKey ${gameData.title}: ${gameData.titles.join(', ')}`);
+      }
     }
     
     console.log(`Found ${gamesByReleaseKey.size} unique games (some may have multiple executables)\n`);
@@ -584,20 +671,9 @@ export async function importFromGOGGalaxy(config) {
     const gameReleaseKeyMap = new Map();
     // Map to track releaseKey -> igdbId mapping (for collections lookup)
     const gameReleaseKeyToIgdbIdMap = new Map();
-    const processedTitles = new Set(); // Track processed titles (normalized) to avoid duplicates
     
-    // Filter out duplicates before processing to get accurate count
-    const gamesToProcess = [];
-    for (const [releaseKey, gameData] of gamesByReleaseKey) {
-      const normalizedTitle = gameData.title.toLowerCase().trim();
-      if (!processedTitles.has(normalizedTitle)) {
-        processedTitles.add(normalizedTitle);
-        gamesToProcess.push([releaseKey, gameData]);
-      }
-    }
-    
-    const totalGames = gamesToProcess.length;
-    processedTitles.clear(); // Reset for actual processing
+    // Process all games (gamesByReleaseKey already groups by releaseKey, so each releaseKey appears only once)
+    const totalGames = gamesByReleaseKey.size;
     
     // Import each game (processing all executables together)
     console.log(`=== Importing Games (${totalGames} games) ===`);
@@ -605,25 +681,14 @@ export async function importFromGOGGalaxy(config) {
     let skipCount = 0;
     let currentIndex = 0;
     
-    for (const [releaseKey, gameData] of gamesToProcess) {
+    for (const [releaseKey, gameData] of gamesByReleaseKey) {
       currentIndex++;
-      
-      // Normalize title for duplicate detection (lowercase, trim)
-      const normalizedTitle = gameData.title.toLowerCase().trim();
-      
-      // Skip if this title was already processed
-      if (processedTitles.has(normalizedTitle)) {
-        console.log(`  [${currentIndex}/${totalGames}] Skipping duplicate title: ${gameData.title} (releaseKey: ${releaseKey})`);
-        continue;
-      }
-      
-      processedTitles.add(normalizedTitle);
       
       console.log(`[${currentIndex}/${totalGames}] Processing game: ${gameData.title}`);
       
       try {
         const result = await importGame(
-          gameData.title,
+          gameData.titles, // Pass all titles to try
           releaseKey,
           gameData.executables,
           metadataPath,
@@ -690,33 +755,43 @@ export async function importFromGOGGalaxy(config) {
           gp.releaseKey,
           json_extract(gp.value, '$.title') as title,
           ptlp.executablePath,
-          ptlp.label
+          ptlp.label,
+          MAX(json_extract(gp82.value, '$.releaseDate')) as releaseDate
         FROM GamePieces gp
         LEFT JOIN LibraryReleases lr ON gp.releaseKey = lr.releaseKey
         LEFT JOIN PlayTasks pt ON gp.releaseKey = pt.gameReleaseKey
         LEFT JOIN PlayTaskLaunchParameters ptlp ON pt.id = ptlp.playTaskId
+        LEFT JOIN GamePieces gp82 ON gp.releaseKey = gp82.releaseKey AND gp82.gamePieceTypeId = 82
         WHERE gp.value IS NOT NULL 
           AND gp.value != ''
           AND gp.releaseKey IS NOT NULL
           AND lr.releaseKey IS NOT NULL
           AND json_extract(gp.value, '$.title') IS NOT NULL
           AND json_extract(gp.value, '$.title') != ''
-        ORDER BY title
+        GROUP BY gp.releaseKey, json_extract(gp.value, '$.title'), ptlp.executablePath, ptlp.label
+        ORDER BY releaseDate
       `);
       
       const games = gamesQuery.all();
       
-      // Group games by releaseKey to get titles
+      // Group games by releaseKey to get titles (collect all unique titles)
       const gamesByReleaseKey = new Map();
       for (const game of games) {
         if (!game.releaseKey) continue;
         
         if (!gamesByReleaseKey.has(game.releaseKey)) {
           gamesByReleaseKey.set(game.releaseKey, {
-            title: game.title,
+            titles: new Set([game.title]), // Track all unique titles for this releaseKey
+            title: game.title, // Keep first title for display/logging
             executables: [],
             executableSet: new Set()
           });
+        } else {
+          const gameData = gamesByReleaseKey.get(game.releaseKey);
+          // Add title to set of unique titles
+          if (game.title) {
+            gameData.titles.add(game.title);
+          }
         }
         
         if (game.executablePath) {
@@ -732,9 +807,14 @@ export async function importFromGOGGalaxy(config) {
         }
       }
       
-      // Clean up executableSet
+      // Clean up executableSet and convert titles Set to Array
       for (const gameData of gamesByReleaseKey.values()) {
         delete gameData.executableSet;
+        gameData.titles = Array.from(gameData.titles);
+        // Log if multiple titles found for same releaseKey
+        if (gameData.titles.length > 1) {
+          console.log(`  Note: Found ${gameData.titles.length} different titles for releaseKey ${gameData.title}: ${gameData.titles.join(', ')}`);
+        }
       }
       
       // Get games for each tag with release date from GamePieces type 82
