@@ -54,6 +54,13 @@ async function importGame(gameTitle, releaseKey, executables, metadataPath, gala
   // Convert myRating from 0-5 scale to 0-10 scale (stars)
   const stars = myRating !== null && myRating !== undefined ? myRating * 2 : null;
   
+  // Log stars when passing to server
+  if (stars !== null) {
+    console.log(`  Stars (myRating ${myRating} -> stars ${stars}): ${stars}`);
+  } else if (myRating !== null && myRating !== undefined) {
+    console.log(`  Stars: null (myRating was ${myRating})`);
+  }
+  
   const gameData = {
     igdbId: gameId,
     name: fullGameData?.name || igdbGame.name,

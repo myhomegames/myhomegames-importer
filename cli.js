@@ -4,6 +4,7 @@
 
 import path from 'path';
 import os from 'os';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { importFromGOGGalaxy } from './importers/gog-galaxy/index.js';
@@ -19,7 +20,7 @@ const importers = {
   'gog-galaxy': {
     name: 'GOG Galaxy',
     handler: importFromGOGGalaxy,
-    requiredEnv: ['SERVER_URL', 'API_TOKEN', 'TWITCH_CLIENT_ID', 'TWITCH_CLIENT_SECRET'],
+    requiredEnv: ['SERVER_URL', 'TWITCH_CLIENT_ID', 'TWITCH_CLIENT_SECRET'],
     optionalEnv: ['GALAXY_DB_PATH', 'GALAXY_IMAGES_PATH', 'LIMIT'],
   },
 };
@@ -45,7 +46,7 @@ function printUsage() {
   console.log('  node cli.js gog-galaxy --metadata-path /path/to/metadata --search "Game Title"');
   console.log('  node cli.js gog-galaxy --metadata-path /path/to/metadata --games-only');
   console.log('  node cli.js gog-galaxy --metadata-path /path/to/metadata --collections-only');
-  console.log('  METADATA_PATH=/path/to/metadata SERVER_URL=http://localhost:3000 API_TOKEN=xxx TWITCH_CLIENT_ID=xxx TWITCH_CLIENT_SECRET=xxx node cli.js gog-galaxy');
+  console.log('  METADATA_PATH=/path/to/metadata SERVER_URL=http://localhost:3000 TWITCH_CLIENT_ID=xxx TWITCH_CLIENT_SECRET=xxx node cli.js gog-galaxy');
   console.log('  METADATA_PATH=/path/to/metadata SEARCH="Game Title" node cli.js gog-galaxy');
   console.log('');
 }
@@ -69,6 +70,41 @@ function parseArgs() {
   }
   
   return options;
+}
+
+/**
+ * Load API token from tokens.json file
+ * @param {string} metadataPath - Path to metadata directory
+ * @returns {string|null} - Access token or null if not found
+ */
+function loadTokenFromTokensFile(metadataPath) {
+  try {
+    const tokensPath = path.join(metadataPath, 'tokens.json');
+    
+    if (!fs.existsSync(tokensPath)) {
+      return null;
+    }
+    
+    const tokensContent = fs.readFileSync(tokensPath, 'utf-8');
+    const tokens = JSON.parse(tokensContent);
+    
+    // Find first valid token (not expired)
+    for (const userId in tokens) {
+      const tokenData = tokens[userId];
+      if (tokenData && tokenData.accessToken) {
+        // Check if token is expired
+        if (tokenData.expiresAt && Date.now() >= tokenData.expiresAt) {
+          continue; // Skip expired token
+        }
+        return tokenData.accessToken;
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.warn(`Warning: Failed to load token from tokens.json: ${error.message}`);
+    return null;
+  }
 }
 
 async function main() {
@@ -120,7 +156,17 @@ async function main() {
     );
     
     config.serverUrl = process.env.SERVER_URL || options.server_url || 'http://localhost:3000';
-    config.apiToken = process.env.API_TOKEN || options.api_token;
+    
+    // Load API_TOKEN from tokens.json (never from .env)
+    config.apiToken = null;
+    if (config.metadataPath) {
+      const tokenFromFile = loadTokenFromTokensFile(config.metadataPath);
+      if (tokenFromFile) {
+        config.apiToken = tokenFromFile;
+        console.log('[INFO] Using API_TOKEN from tokens.json');
+      }
+    }
+    
     config.twitchClientId = process.env.TWITCH_CLIENT_ID || options.twitch_client_id;
     config.twitchClientSecret = process.env.TWITCH_CLIENT_SECRET || options.twitch_client_secret;
     
@@ -136,7 +182,7 @@ async function main() {
     }
     
     if (!config.apiToken) {
-      console.error('Error: API_TOKEN environment variable is required for GOG Galaxy importer');
+      console.error('Error: API_TOKEN not found in tokens.json. Please login via the web interface first.');
       process.exit(1);
     }
     
