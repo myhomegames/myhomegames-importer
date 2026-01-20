@@ -80,15 +80,19 @@ export async function getGameDetailsFromServer(gameId, serverUrl, apiToken, twit
  * @param {string} apiToken - API token for authentication
  * @param {string} twitchClientId - Twitch Client ID (for IGDB)
  * @param {string} twitchClientSecret - Twitch Client Secret (for IGDB)
+ * @param {number|null} year - Optional release year to filter results
  * @returns {Promise<Array<Object>>} - Array of game objects with id and name, or empty array if not found
  */
-export async function searchGameOnServer(title, serverUrl, apiToken, twitchClientId, twitchClientSecret) {
+export async function searchGameOnServer(title, serverUrl, apiToken, twitchClientId, twitchClientSecret, year = null) {
   return new Promise((resolve, reject) => {
     try {
       const url = new URL(`${serverUrl}/igdb/search`);
       url.searchParams.set('q', title);
       url.searchParams.set('clientId', twitchClientId);
       url.searchParams.set('clientSecret', twitchClientSecret);
+      if (year !== null && year !== undefined) {
+        url.searchParams.set('year', String(year));
+      }
 
       const isHttps = url.protocol === 'https:';
       const httpModule = isHttps ? https : http;
