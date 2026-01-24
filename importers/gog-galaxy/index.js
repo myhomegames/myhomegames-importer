@@ -14,6 +14,75 @@ function sanitizeExecutableName(name) {
   return name.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
+const IMPORTER_DIRNAME = 'importer';
+const IMPORT_MAP_FILENAME = 'gog-galaxy-releasekey-map.json';
+
+function loadReleaseKeyMap(metadataPath) {
+  const importDirPath = path.join(metadataPath, IMPORTER_DIRNAME);
+  const importMapPath = path.join(importDirPath, IMPORT_MAP_FILENAME);
+  if (!fs.existsSync(importMapPath)) {
+    return { importMapPath, importMap: new Map(), existed: false };
+  }
+
+  try {
+    const raw = JSON.parse(fs.readFileSync(importMapPath, 'utf-8'));
+    const importMap = new Map();
+    if (raw && typeof raw === 'object') {
+      for (const [releaseKey, entry] of Object.entries(raw)) {
+        if (!releaseKey) continue;
+        if (entry && typeof entry === 'object') {
+          importMap.set(releaseKey, entry);
+        } else {
+          importMap.set(releaseKey, { igdbId: entry });
+        }
+      }
+    }
+    return { importMapPath, importMap, existed: true };
+  } catch (error) {
+    console.warn(`Warning: Failed to read import map at ${importMapPath}: ${error.message}`);
+    return { importMapPath, importMap: new Map(), existed: true };
+  }
+}
+
+function saveReleaseKeyMap(importMapPath, importMap) {
+  const importDirPath = path.dirname(importMapPath);
+  fs.mkdirSync(importDirPath, { recursive: true });
+  const data = Object.fromEntries(importMap);
+  fs.writeFileSync(importMapPath, JSON.stringify(data, null, 2));
+}
+
+function buildReleaseKeyIdMap(importMap) {
+  const map = new Map();
+  for (const [releaseKey, entry] of importMap) {
+    if (entry && entry.igdbId) {
+      map.set(releaseKey, entry.igdbId);
+    } else if (entry) {
+      map.set(releaseKey, entry);
+    }
+  }
+  return map;
+}
+
+function formatReleaseDateForMap(releaseDate) {
+  if (releaseDate === null || releaseDate === undefined) return null;
+
+  const raw = typeof releaseDate === 'string' ? releaseDate.trim() : releaseDate;
+  if (typeof raw === 'string' && raw.includes('-')) {
+    return raw;
+  }
+
+  const numericValue = typeof raw === 'number' ? raw : parseInt(raw, 10);
+  if (Number.isNaN(numericValue)) {
+    return String(raw);
+  }
+
+  if (String(numericValue).length <= 4) {
+    return String(numericValue);
+  }
+
+  return new Date(numericValue * 1000).toISOString().split('T')[0];
+}
+
 /**
  * Import a single game
  * @param {string|Array<string>} gameTitles - Game title(s) to try (can be array for multiple titles)
@@ -75,8 +144,15 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
   }
   
   // Prepare game data for API
-  // Use IGDB releaseDate if available, otherwise fallback to GOG Galaxy releaseDate
-  let releaseDate = fullGameData?.releaseDate || null;
+  // Use IGDB releaseDateFull timestamp if available, otherwise fallback to IGDB releaseDate (year), then GOG
+  const igdbReleaseDateFull = fullGameData?.releaseDateFull?.timestamp || null;
+  const igdbReleaseDate = fullGameData?.releaseDate || null;
+  console.log(`  Release date (IGDB full timestamp): ${igdbReleaseDateFull !== null ? igdbReleaseDateFull : 'null'}`);
+  if (igdbReleaseDateFull) {
+    console.log(`  Release date (IGDB full ISO): ${new Date(igdbReleaseDateFull * 1000).toISOString().split('T')[0]}`);
+  }
+  console.log(`  Release date (GOG raw): ${gogReleaseDate !== null && gogReleaseDate !== undefined ? gogReleaseDate : 'null'}`);
+  let releaseDate = igdbReleaseDateFull || igdbReleaseDate;
   if (!releaseDate && gogReleaseDate) {
     // Convert GOG Galaxy releaseDate (Unix timestamp as string) to ISO format
     try {
@@ -90,6 +166,7 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
       // Ignore parsing errors
     }
   }
+  console.log(`  Release date (final for gameData): ${releaseDate !== null && releaseDate !== undefined ? releaseDate : 'null'}`);
   // Convert myRating from 0-5 scale to 0-10 scale (stars)
   const stars = myRating !== null && myRating !== undefined ? myRating * 2 : null;
   
@@ -213,7 +290,10 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
   // Return both gameId (folder name) and igdbId for collection mapping
   return {
     gameId: gameId,
-    igdbId: gameId // gameId is the IGDB ID used as folder name
+    igdbId: gameId, // gameId is the IGDB ID used as folder name
+    title: fullGameData?.name || igdbGame.name,
+    releaseDate: formatReleaseDateForMap(releaseDate),
+    stars: stars
   };
 }
 
@@ -567,6 +647,13 @@ export async function importFromGOGGalaxy(config) {
   if (!twitchClientId || !twitchClientSecret) {
     throw new Error('TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET are required for IGDB search');
   }
+
+  const { importMapPath, importMap, existed: importMapExists } = loadReleaseKeyMap(metadataPath);
+  if (importMapExists) {
+    console.log(`Loaded ${importMap.size} imported games from: ${importMapPath}`);
+  } else {
+    console.log(`No existing import map found. Will create: ${importMapPath}`);
+  }
   
   // Open GOG Galaxy database
   console.log('Opening GOG Galaxy database...');
@@ -701,6 +788,14 @@ export async function importFromGOGGalaxy(config) {
     const gameReleaseKeyMap = new Map();
     // Map to track releaseKey -> igdbId mapping (for collections lookup)
     const gameReleaseKeyToIgdbIdMap = new Map();
+    let importMapDirty = false;
+    
+    // Preload persisted mappings so collections can resolve older imports
+    const persistedReleaseKeyIdMap = buildReleaseKeyIdMap(importMap);
+    for (const [releaseKey, igdbId] of persistedReleaseKeyIdMap) {
+      gameReleaseKeyMap.set(releaseKey, igdbId);
+      gameReleaseKeyToIgdbIdMap.set(releaseKey, igdbId);
+    }
     
     // Process all games (gamesByReleaseKey already groups by releaseKey, so each releaseKey appears only once)
     const totalGames = gamesByReleaseKey.size;
@@ -715,6 +810,15 @@ export async function importFromGOGGalaxy(config) {
       currentIndex++;
       
       console.log(`[${currentIndex}/${totalGames}] Processing game: ${gameData.title}`);
+      console.log(`  Release date (GOG from DB): ${gameData.releaseDate !== null && gameData.releaseDate !== undefined ? gameData.releaseDate : 'null'}`);
+
+      const existingEntry = importMap.get(releaseKey);
+      const existingIgdbId = existingEntry?.igdbId || existingEntry;
+      if (existingIgdbId) {
+        console.log(`  Skipping already imported releaseKey: ${releaseKey} (IGDB ID: ${existingIgdbId})`);
+        skipCount++;
+        continue;
+      }
       
       try {
         const result = await importGame(
@@ -738,6 +842,13 @@ export async function importFromGOGGalaxy(config) {
           // Also store the IGDB ID mapping
           if (result.igdbId) {
             gameReleaseKeyToIgdbIdMap.set(releaseKey, result.igdbId);
+            importMap.set(releaseKey, {
+              igdbId: result.igdbId,
+              title: result.title || null,
+              releaseDate: result.releaseDate || null,
+              stars: result.stars !== undefined ? result.stars : null
+            });
+            importMapDirty = true;
           }
         } else {
           skipCount++;
@@ -745,6 +856,15 @@ export async function importFromGOGGalaxy(config) {
       } catch (error) {
         console.error(`  [${currentIndex}/${totalGames}] Error importing ${gameData.title}:`, error.message);
         skipCount++;
+      }
+    }
+
+    if (importMapDirty) {
+      try {
+        saveReleaseKeyMap(importMapPath, importMap);
+        console.log(`Saved import map: ${importMapPath}`);
+      } catch (error) {
+        console.warn(`Warning: Failed to save import map: ${error.message}`);
       }
     }
     
@@ -895,7 +1015,18 @@ export async function importFromGOGGalaxy(config) {
       
       // Import collections
       if (gamesByReleaseKey.size > 0 && tagsData.length > 0) {
-        await importCollections(metadataPath, new Map(), new Map(), tagsData, gamesByReleaseKey, serverUrl, apiToken, twitchClientId, twitchClientSecret);
+        const persistedReleaseKeyIdMap = buildReleaseKeyIdMap(importMap);
+        await importCollections(
+          metadataPath,
+          new Map(persistedReleaseKeyIdMap),
+          new Map(persistedReleaseKeyIdMap),
+          tagsData,
+          gamesByReleaseKey,
+          serverUrl,
+          apiToken,
+          twitchClientId,
+          twitchClientSecret
+        );
       }
     }
     

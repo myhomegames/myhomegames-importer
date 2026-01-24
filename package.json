@@ -1,6 +1,6 @@
 {
   "name": "myhomegames-importer",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Import games and collections from GOG Galaxy to MyHomeGames",
   "main": "index.js",
   "type": "module",
