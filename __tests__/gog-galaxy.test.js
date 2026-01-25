@@ -762,7 +762,7 @@ describe('GOG Galaxy Importer', () => {
       existsSpy.mockRestore();
     });
 
-    test('should skip IGDB name search when igdbId is provided', async () => {
+    test('should skip IGDB when igdbId is provided', async () => {
       const execPathOne = '/tmp/test-script.sh';
       const execPathTwo = '/tmp/run.bat';
       const execPathThree = '/tmp/launcher';
@@ -788,17 +788,12 @@ describe('GOG Galaxy Importer', () => {
         null,
         null,
         null,
-        { igdbId: 999, skipSearch: true }
+        { igdbId: 999, skipSearch: true, skipIgdbFetch: true, skipCreate: true }
       );
 
       expect(mockSearchGameOnServer).not.toHaveBeenCalled();
-      expect(mockGetGameDetailsFromServer).toHaveBeenCalledWith(
-        999,
-        'http://localhost:3000',
-        'token',
-        'clientId',
-        'clientSecret'
-      );
+      expect(mockGetGameDetailsFromServer).not.toHaveBeenCalled();
+      expect(mockCreateGameViaAPI).not.toHaveBeenCalled();
       expect(mockUploadExecutableViaAPI).toHaveBeenCalledTimes(3);
       existsSpy.mockRestore();
     });

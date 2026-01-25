@@ -103,7 +103,12 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
   const titlesToTry = Array.isArray(gameTitles) ? gameTitles : [gameTitles];
   const primaryTitle = titlesToTry[0]; // Use first title for logging
 
-  const { igdbId: overrideIgdbId, skipSearch = false } = options;
+  const {
+    igdbId: overrideIgdbId,
+    skipSearch = false,
+    skipCreate = false,
+    skipIgdbFetch = false
+  } = options;
   let igdbGame = null;
   let gameId = null;
 
@@ -151,12 +156,16 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
   }
   
   // Get full game details from IGDB
-  console.log(`  Fetching full game details...`);
   let fullGameData = null;
-  try {
-    fullGameData = await getGameDetailsFromServer(gameId, serverUrl, apiToken, twitchClientId, twitchClientSecret);
-  } catch (error) {
-    console.warn(`  Warning: Failed to fetch full game details: ${error.message}`);
+  if (skipIgdbFetch) {
+    console.log(`  UPLOAD=true -> skipping IGDB details fetch`);
+  } else {
+    console.log(`  Fetching full game details...`);
+    try {
+      fullGameData = await getGameDetailsFromServer(gameId, serverUrl, apiToken, twitchClientId, twitchClientSecret);
+    } catch (error) {
+      console.warn(`  Warning: Failed to fetch full game details: ${error.message}`);
+    }
   }
   
   // Prepare game data for API
@@ -222,18 +231,22 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
     similarGames: fullGameData?.similarGames || null,
   };
   
-  // Create game via API
-  console.log(`  Creating game via API...`);
-  try {
-    await createGameViaAPI(gameData, serverUrl, apiToken);
-    console.log(`  Created game via API`);
-  } catch (error) {
-    // If game already exists (409), that's fine, continue
-    if (error.message.includes('409') || error.message.includes('already exists')) {
-      console.log(`  Game already exists, skipping creation`);
-    } else {
-      throw error;
+  if (!skipCreate) {
+    // Create game via API
+    console.log(`  Creating game via API...`);
+    try {
+      await createGameViaAPI(gameData, serverUrl, apiToken);
+      console.log(`  Created game via API`);
+    } catch (error) {
+      // If game already exists (409), that's fine, continue
+      if (error.message.includes('409') || error.message.includes('already exists')) {
+        console.log(`  Game already exists, skipping creation`);
+      } else {
+        throw error;
+      }
     }
+  } else {
+    console.log(`  UPLOAD=true -> skipping game creation`);
   }
   
   // Upload executables via API
@@ -857,7 +870,12 @@ export async function importFromGOGGalaxy(config) {
           gameData.releaseYear,
           gameData.releaseDate || null, // Pass GOG Galaxy releaseDate as fallback
           shouldForceUpload
-            ? { igdbId: existingIgdbId, skipSearch: true }
+            ? {
+                igdbId: existingIgdbId,
+                skipSearch: true,
+                skipCreate: true,
+                skipIgdbFetch: true
+              }
             : undefined
         );
         
