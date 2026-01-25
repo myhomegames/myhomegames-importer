@@ -11,6 +11,7 @@ const mockUploadBackgroundViaAPI = jest.fn();
 const mockCreateCollectionViaAPI = jest.fn();
 const mockUpdateCollectionGamesViaAPI = jest.fn();
 const mockGetCollectionsViaAPI = jest.fn();
+let mockDbRows = [];
 
 jest.unstable_mockModule('../importers/common/igdb.js', () => ({
   searchGameOnServer: mockSearchGameOnServer,
@@ -22,6 +23,19 @@ jest.unstable_mockModule('../importers/common/igdb.js', () => ({
   createCollectionViaAPI: mockCreateCollectionViaAPI,
   updateCollectionGamesViaAPI: mockUpdateCollectionGamesViaAPI,
   getCollectionsViaAPI: mockGetCollectionsViaAPI,
+}));
+
+class MockDatabase {
+  prepare() {
+    return {
+      all: () => mockDbRows,
+    };
+  }
+  close() {}
+}
+
+jest.unstable_mockModule('better-sqlite3', () => ({
+  default: MockDatabase,
 }));
 
 const modulePromise = import('../importers/gog-galaxy/index.js');
@@ -796,6 +810,67 @@ describe('GOG Galaxy Importer', () => {
       expect(mockCreateGameViaAPI).not.toHaveBeenCalled();
       expect(mockUploadExecutableViaAPI).toHaveBeenCalledTimes(3);
       existsSpy.mockRestore();
+    });
+  });
+
+  describe('Import map update on UPDATE', () => {
+    test('should backfill releaseDate and stars when missing', async () => {
+      const releaseKey = 'generic_123456';
+      const igdbId = 999;
+      const gogReleaseDate = '1700000000';
+      const myRating = 4;
+      const metadataPath = '/tmp/metadata';
+      const importMapPath = `${metadataPath}/importer/gog-galaxy-releasekey-map.json`;
+
+      mockDbRows = [
+        {
+          releaseKey,
+          title: 'Test Game',
+          executablePath: null,
+          label: null,
+          myRating,
+          releaseDate: gogReleaseDate,
+        },
+      ];
+
+      const existsSpy = jest.spyOn(fs, 'existsSync').mockImplementation((p) => {
+        if (p === '/tmp/db' || p === metadataPath || p === importMapPath) return true;
+        return false;
+      });
+      const readSpy = jest.spyOn(fs, 'readFileSync').mockImplementation((p) => {
+        if (p === importMapPath) {
+          return JSON.stringify({
+            [releaseKey]: { igdbId, title: 'Test Game' },
+          });
+        }
+        return '';
+      });
+      const mkdirSpy = jest.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      const writeSpy = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+
+      const { importFromGOGGalaxy } = await modulePromise;
+      await importFromGOGGalaxy({
+        galaxyDbPath: '/tmp/db',
+        galaxyImagesPath: '/tmp/images',
+        metadataPath,
+        serverUrl: 'http://localhost:3000',
+        apiToken: 'token',
+        twitchClientId: 'clientId',
+        twitchClientSecret: 'clientSecret',
+        gamesOnly: true,
+        upload: true,
+      });
+
+      const expectedReleaseDate = new Date(parseInt(gogReleaseDate, 10) * 1000).toISOString().split('T')[0];
+      expect(writeSpy).toHaveBeenCalled();
+      const written = JSON.parse(writeSpy.mock.calls[0][1]);
+      expect(written[releaseKey].releaseDate).toBe(expectedReleaseDate);
+      expect(written[releaseKey].stars).toBe(8);
+
+      existsSpy.mockRestore();
+      readSpy.mockRestore();
+      mkdirSpy.mockRestore();
+      writeSpy.mockRestore();
     });
   });
 });

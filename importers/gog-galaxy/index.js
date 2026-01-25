@@ -885,11 +885,17 @@ export async function importFromGOGGalaxy(config) {
           // Also store the IGDB ID mapping
           if (result.igdbId) {
             gameReleaseKeyToIgdbIdMap.set(releaseKey, result.igdbId);
+            const previousEntry = importMap.get(releaseKey);
+            const previousObject = previousEntry && typeof previousEntry === 'object'
+              ? previousEntry
+              : { igdbId: previousEntry };
+            const hasReleaseDate = previousObject.releaseDate !== null && previousObject.releaseDate !== undefined;
+            const hasStars = previousObject.stars !== null && previousObject.stars !== undefined;
             importMap.set(releaseKey, {
               igdbId: result.igdbId,
-              title: result.title || null,
-              releaseDate: result.releaseDate || null,
-              stars: result.stars !== undefined ? result.stars : null
+              title: previousObject.title || result.title || null,
+              releaseDate: hasReleaseDate ? previousObject.releaseDate : (result.releaseDate || null),
+              stars: hasStars ? previousObject.stars : (result.stars !== undefined ? result.stars : null)
             });
             importMapDirty = true;
           }
