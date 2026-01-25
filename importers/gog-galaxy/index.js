@@ -98,41 +98,57 @@ function formatReleaseDateForMap(releaseDate) {
  * @param {number|null} releaseYear - Release year from GOG Galaxy (for filtering IGDB search)
  * @param {string|null} gogReleaseDate - Release date from GOG Galaxy (Unix timestamp as string, used as fallback if IGDB doesn't have it)
  */
-async function importGame(gameTitles, releaseKey, executables, metadataPath, galaxyImagesPath, serverUrl, apiToken, twitchClientId, twitchClientSecret, myRating = null, releaseYear = null, gogReleaseDate = null) {
+async function importGame(gameTitles, releaseKey, executables, metadataPath, galaxyImagesPath, serverUrl, apiToken, twitchClientId, twitchClientSecret, myRating = null, releaseYear = null, gogReleaseDate = null, options = {}) {
   // Normalize gameTitles to array
   const titlesToTry = Array.isArray(gameTitles) ? gameTitles : [gameTitles];
   const primaryTitle = titlesToTry[0]; // Use first title for logging
-  
-  // Search game on MyHomeGames server, trying each title until one succeeds
-  console.log(`  Searching on MyHomeGames server...`);
-  let igdbGames = null;
-  let usedTitle = null;
-  
-  for (const title of titlesToTry) {
-    if (titlesToTry.length > 1) {
-      console.log(`    Trying title: "${title}"`);
+
+  const { igdbId: overrideIgdbId, skipSearch = false } = options;
+  let igdbGame = null;
+  let gameId = null;
+
+  if (overrideIgdbId) {
+    gameId = Number(overrideIgdbId);
+    if (Number.isNaN(gameId)) {
+      gameId = overrideIgdbId;
     }
-    igdbGames = await searchGameOnServer(title, serverUrl, apiToken, twitchClientId, twitchClientSecret, releaseYear);
-    
-    if (igdbGames && igdbGames.length > 0) {
-      usedTitle = title;
+    console.log(`  Skipping IGDB name search (UPLOAD=true). Using IGDB ID: ${gameId}`);
+    igdbGame = { id: gameId, name: primaryTitle };
+  } else {
+    if (skipSearch) {
+      console.warn('  Warning: skipSearch enabled but no IGDB ID provided; falling back to name search.');
+    }
+    // Search game on MyHomeGames server, trying each title until one succeeds
+    console.log(`  Searching on MyHomeGames server...`);
+    let igdbGames = null;
+    let usedTitle = null;
+
+    for (const title of titlesToTry) {
       if (titlesToTry.length > 1) {
-        console.log(`    Found results with title: "${title}"`);
+        console.log(`    Trying title: "${title}"`);
       }
-      break;
+      igdbGames = await searchGameOnServer(title, serverUrl, apiToken, twitchClientId, twitchClientSecret, releaseYear);
+
+      if (igdbGames && igdbGames.length > 0) {
+        usedTitle = title;
+        if (titlesToTry.length > 1) {
+          console.log(`    Found results with title: "${title}"`);
+        }
+        break;
+      }
     }
+
+    if (!igdbGames || igdbGames.length === 0) {
+      const allTitles = titlesToTry.join('", "');
+      console.warn(`  Warning: Game not found with any title, skipping: "${allTitles}"`);
+      return null;
+    }
+
+    // Use first game from search results (no longer filtering by already imported)
+    igdbGame = igdbGames[0];
+    gameId = igdbGame.id;
+    console.log(`  Found: ${igdbGame.name} (ID: ${gameId})`);
   }
-  
-  if (!igdbGames || igdbGames.length === 0) {
-    const allTitles = titlesToTry.join('", "');
-    console.warn(`  Warning: Game not found with any title, skipping: "${allTitles}"`);
-    return null;
-  }
-  
-  // Use first game from search results (no longer filtering by already imported)
-  const igdbGame = igdbGames[0];
-  const gameId = igdbGame.id;
-  console.log(`  Found: ${igdbGame.name} (ID: ${gameId})`);
   
   // Get full game details from IGDB
   console.log(`  Fetching full game details...`);
@@ -620,6 +636,7 @@ export async function importFromGOGGalaxy(config) {
     search,
     gamesOnly = false,
     collectionsOnly = false,
+    upload = false,
   } = config;
 
   console.log('=== GOG Galaxy Importer ===\n');
@@ -814,10 +831,15 @@ export async function importFromGOGGalaxy(config) {
 
       const existingEntry = importMap.get(releaseKey);
       const existingIgdbId = existingEntry?.igdbId || existingEntry;
-      if (existingIgdbId) {
+      const shouldForceUpload = upload && !!existingIgdbId;
+      if (existingIgdbId && !shouldForceUpload) {
         console.log(`  Skipping already imported releaseKey: ${releaseKey} (IGDB ID: ${existingIgdbId})`);
         skipCount++;
         continue;
+      }
+
+      if (shouldForceUpload) {
+        console.log(`  UPLOAD=true -> reimporting releaseKey: ${releaseKey} (IGDB ID: ${existingIgdbId})`);
       }
       
       try {
@@ -833,7 +855,10 @@ export async function importFromGOGGalaxy(config) {
           twitchClientSecret,
           gameData.myRating,
           gameData.releaseYear,
-          gameData.releaseDate || null // Pass GOG Galaxy releaseDate as fallback
+          gameData.releaseDate || null, // Pass GOG Galaxy releaseDate as fallback
+          shouldForceUpload
+            ? { igdbId: existingIgdbId, skipSearch: true }
+            : undefined
         );
         
         if (result && result.gameId) {
@@ -1036,3 +1061,5 @@ export async function importFromGOGGalaxy(config) {
   
   console.log('\n=== Import Complete ===');
 }
+
+export { importGame };

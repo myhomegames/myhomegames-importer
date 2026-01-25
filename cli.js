@@ -172,6 +172,8 @@ async function main() {
     
     config.limit = process.env.LIMIT ? parseInt(process.env.LIMIT, 10) : (options.limit ? parseInt(options.limit, 10) : null);
     config.search = process.env.SEARCH || options.search || null;
+    const uploadEnv = process.env.UPLOAD ? process.env.UPLOAD.toLowerCase() : null;
+    config.upload = uploadEnv === 'true' || uploadEnv === 'yes' || options.upload === true || false;
     config.gamesOnly = process.env.GAMES_ONLY === 'true' || options.games_only === true || options.gamesOnly === true || false;
     config.collectionsOnly = process.env.COLLECTIONS_ONLY === 'true' || options.collections_only === true || options.collectionsOnly === true || false;
     

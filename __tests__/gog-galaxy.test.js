@@ -1,4 +1,30 @@
 // Test suite for GOG Galaxy importer
+import { jest } from '@jest/globals';
+import fs from 'fs';
+
+const mockSearchGameOnServer = jest.fn();
+const mockGetGameDetailsFromServer = jest.fn();
+const mockCreateGameViaAPI = jest.fn();
+const mockUploadExecutableViaAPI = jest.fn();
+const mockUploadCoverViaAPI = jest.fn();
+const mockUploadBackgroundViaAPI = jest.fn();
+const mockCreateCollectionViaAPI = jest.fn();
+const mockUpdateCollectionGamesViaAPI = jest.fn();
+const mockGetCollectionsViaAPI = jest.fn();
+
+jest.unstable_mockModule('../importers/common/igdb.js', () => ({
+  searchGameOnServer: mockSearchGameOnServer,
+  getGameDetailsFromServer: mockGetGameDetailsFromServer,
+  createGameViaAPI: mockCreateGameViaAPI,
+  uploadExecutableViaAPI: mockUploadExecutableViaAPI,
+  uploadCoverViaAPI: mockUploadCoverViaAPI,
+  uploadBackgroundViaAPI: mockUploadBackgroundViaAPI,
+  createCollectionViaAPI: mockCreateCollectionViaAPI,
+  updateCollectionGamesViaAPI: mockUpdateCollectionGamesViaAPI,
+  getCollectionsViaAPI: mockGetCollectionsViaAPI,
+}));
+
+const modulePromise = import('../importers/gog-galaxy/index.js');
 
 describe('GOG Galaxy Importer', () => {
   describe('sanitizeExecutableName', () => {
@@ -624,6 +650,157 @@ describe('GOG Galaxy Importer', () => {
       // Should search filesystem by folder name (IGDB ID)
       const shouldSearchByFolderName = !!foundIgdbId;
       expect(shouldSearchByFolderName).toBe(true);
+    });
+  });
+
+  describe('Executable upload', () => {
+    beforeEach(() => {
+      mockSearchGameOnServer.mockResolvedValue([{ id: 123, name: 'Test Game' }]);
+      mockGetGameDetailsFromServer.mockResolvedValue({
+        id: 123,
+        name: 'Test Game',
+      });
+      mockCreateGameViaAPI.mockResolvedValue({ status: 'success' });
+      mockUploadExecutableViaAPI.mockResolvedValue({ status: 'success' });
+      mockUploadCoverViaAPI.mockResolvedValue({ status: 'success' });
+      mockUploadBackgroundViaAPI.mockResolvedValue({ status: 'success' });
+      mockCreateCollectionViaAPI.mockResolvedValue({ status: 'success' });
+      mockUpdateCollectionGamesViaAPI.mockResolvedValue({ status: 'success' });
+      mockGetCollectionsViaAPI.mockResolvedValue([]);
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+      mockSearchGameOnServer.mockReset();
+      mockGetGameDetailsFromServer.mockReset();
+      mockCreateGameViaAPI.mockReset();
+      mockUploadExecutableViaAPI.mockReset();
+      mockUploadCoverViaAPI.mockReset();
+      mockUploadBackgroundViaAPI.mockReset();
+      mockCreateCollectionViaAPI.mockReset();
+      mockUpdateCollectionGamesViaAPI.mockReset();
+      mockGetCollectionsViaAPI.mockReset();
+    });
+
+    test('should upload executables for valid paths', async () => {
+      const execPathOne = '/tmp/test-script.sh';
+      const execPathTwo = '/tmp/run.bat';
+      const execPathThree = '/tmp/launcher';
+      const existsSpy = jest
+        .spyOn(fs, 'existsSync')
+        .mockImplementation((p) => p === execPathOne || p === execPathTwo || p === execPathThree);
+
+      const { importGame } = await modulePromise;
+      await importGame(
+        'Test Game',
+        'release-key-1',
+        [
+          { path: execPathOne, label: 'script.sh' },
+          { path: execPathTwo, label: 'run.bat' },
+          { path: execPathThree, label: 'Launcher' }
+        ],
+        '/tmp/metadata',
+        '/tmp/images',
+        'http://localhost:3000',
+        'token',
+        'clientId',
+        'clientSecret'
+      );
+
+      expect(mockUploadExecutableViaAPI).toHaveBeenCalledTimes(3);
+      expect(mockUploadExecutableViaAPI).toHaveBeenNthCalledWith(
+        1,
+        123,
+        execPathOne,
+        'script',
+        'http://localhost:3000',
+        'token'
+      );
+      expect(mockUploadExecutableViaAPI).toHaveBeenNthCalledWith(
+        2,
+        123,
+        execPathTwo,
+        'run',
+        'http://localhost:3000',
+        'token'
+      );
+      expect(mockUploadExecutableViaAPI).toHaveBeenNthCalledWith(
+        3,
+        123,
+        execPathThree,
+        'Launcher',
+        'http://localhost:3000',
+        'token'
+      );
+      existsSpy.mockRestore();
+    });
+
+    test('should skip upload when executable path does not exist', async () => {
+      const execPathOne = '/tmp/missing-script.sh';
+      const execPathTwo = '/tmp/missing-run.bat';
+      const execPathThree = '/tmp/missing-launcher';
+      const existsSpy = jest.spyOn(fs, 'existsSync').mockReturnValue(false);
+
+      const { importGame } = await modulePromise;
+      await importGame(
+        'Test Game',
+        'release-key-2',
+        [
+          { path: execPathOne, label: 'script.sh' },
+          { path: execPathTwo, label: 'run.bat' },
+          { path: execPathThree, label: 'Launcher' }
+        ],
+        '/tmp/metadata',
+        '/tmp/images',
+        'http://localhost:3000',
+        'token',
+        'clientId',
+        'clientSecret'
+      );
+
+      expect(mockUploadExecutableViaAPI).not.toHaveBeenCalled();
+      existsSpy.mockRestore();
+    });
+
+    test('should skip IGDB name search when igdbId is provided', async () => {
+      const execPathOne = '/tmp/test-script.sh';
+      const execPathTwo = '/tmp/run.bat';
+      const execPathThree = '/tmp/launcher';
+      const existsSpy = jest
+        .spyOn(fs, 'existsSync')
+        .mockImplementation((p) => p === execPathOne || p === execPathTwo || p === execPathThree);
+
+      const { importGame } = await modulePromise;
+      await importGame(
+        'Test Game',
+        'release-key-3',
+        [
+          { path: execPathOne, label: 'script.sh' },
+          { path: execPathTwo, label: 'run.bat' },
+          { path: execPathThree, label: 'Launcher' }
+        ],
+        '/tmp/metadata',
+        '/tmp/images',
+        'http://localhost:3000',
+        'token',
+        'clientId',
+        'clientSecret',
+        null,
+        null,
+        null,
+        { igdbId: 999, skipSearch: true }
+      );
+
+      expect(mockSearchGameOnServer).not.toHaveBeenCalled();
+      expect(mockGetGameDetailsFromServer).toHaveBeenCalledWith(
+        999,
+        'http://localhost:3000',
+        'token',
+        'clientId',
+        'clientSecret'
+      );
+      expect(mockUploadExecutableViaAPI).toHaveBeenCalledTimes(3);
+      existsSpy.mockRestore();
     });
   });
 });
