@@ -4,7 +4,7 @@ A modular tool for importing games and collections from various sources into MyH
 
 ## Available Importers
 
-- **GOG Galaxy** - Import games and collections from GOG Galaxy
+- **GOG Galaxy** - Import games and collections from GOG Galaxy. Tested on 2.0.93 (53)
 
 More importers coming soon!
 
