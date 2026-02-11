@@ -90,6 +90,20 @@ async function searchGameWithReducingTitle(title, releaseDateForSearch, serverUr
   return { igdbGames: [], usedTitle: null };
 }
 
+/**
+ * Format timestamp for log output: "value (YYYY-MM-DD)" or "year (year)" or "null"
+ */
+function formatTimestampForLog(value) {
+  if (value === null || value === undefined || value === '') return 'null';
+  const raw = typeof value === 'number' ? value : parseInt(String(value), 10);
+  if (Number.isNaN(raw)) return String(value);
+  // Year-only (4 digits) - common from IGDB releaseDate
+  if (raw >= 1000 && raw <= 9999 && String(raw).length <= 4) {
+    return `${raw} (year)`;
+  }
+  return `${raw} (${new Date(raw * 1000).toISOString().split('T')[0]})`;
+}
+
 function formatReleaseDateForMap(releaseDate) {
   if (releaseDate === null || releaseDate === undefined) return null;
 
@@ -213,11 +227,8 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
   // Use IGDB releaseDateFull timestamp if available, otherwise fallback to IGDB releaseDate (year), then GOG
   const igdbReleaseDateFull = fullGameData?.releaseDateFull?.timestamp || null;
   const igdbReleaseDate = fullGameData?.releaseDate || null;
-  reportLogger.log(`  Release date (IGDB full timestamp): ${igdbReleaseDateFull !== null ? igdbReleaseDateFull : 'null'}`);
-  if (igdbReleaseDateFull) {
-    reportLogger.log(`  Release date (IGDB full ISO): ${new Date(igdbReleaseDateFull * 1000).toISOString().split('T')[0]}`);
-  }
-  reportLogger.log(`  Release date (GOG raw): ${gogReleaseDate !== null && gogReleaseDate !== undefined ? gogReleaseDate : 'null'}`);
+  reportLogger.log(`  Release date (IGDB full): ${formatTimestampForLog(igdbReleaseDateFull)}`);
+  reportLogger.log(`  Release date (GOG raw): ${formatTimestampForLog(gogReleaseDate)}`);
   let releaseDate = igdbReleaseDateFull || igdbReleaseDate;
   if (!releaseDate && gogReleaseDate) {
     // Convert GOG Galaxy releaseDate (Unix timestamp as string) to ISO format
@@ -232,7 +243,7 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
       // Ignore parsing errors
     }
   }
-  reportLogger.log(`  Release date (final for gameData): ${releaseDate !== null && releaseDate !== undefined ? releaseDate : 'null'}`);
+  reportLogger.log(`  Release date (final for gameData): ${formatTimestampForLog(releaseDate)}`);
   // Convert myRating from 0-5 scale to 0-10 scale (stars)
   const stars = myRating !== null && myRating !== undefined ? myRating * 2 : null;
   
@@ -640,8 +651,7 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
     if (uniqueGameIdsWithDates.length > 0) {
       reportLogger.log(`    Games in collection (${uniqueGameIdsWithDates.length}):`);
       for (const { gameId, releaseDate } of uniqueGameIdsWithDates) {
-        const releaseDateStr = releaseDate ? new Date(parseInt(releaseDate, 10) * 1000).toISOString().split('T')[0] : 'N/A';
-        reportLogger.log(`      - IGDB ID: ${gameId}, Release Date: ${releaseDateStr} (timestamp: ${releaseDate || 'null'})`);
+        reportLogger.log(`      - IGDB ID: ${gameId}, Release Date: ${formatTimestampForLog(releaseDate)}`);
       }
     }
     
@@ -891,7 +901,7 @@ export async function importFromGOGGalaxy(config) {
       currentIndex++;
       
       reportLogger.log(`[${currentIndex}/${totalGames}] Processing game: ${gameData.title}`);
-      reportLogger.log(`  Release date (GOG from DB): ${gameData.releaseDate !== null && gameData.releaseDate !== undefined ? gameData.releaseDate : 'null'}`);
+      reportLogger.log(`  Release date (GOG from DB): ${formatTimestampForLog(gameData.releaseDate)}`);
 
       const existingEntry = importMap.get(releaseKey);
       const existingIgdbId = existingEntry?.igdbId || existingEntry;
