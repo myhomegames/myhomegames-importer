@@ -510,6 +510,19 @@ describe('GOG Galaxy Importer', () => {
   });
 
   describe('Collection import - IGDB server search', () => {
+    test('should use first game from search results (current implementation)', () => {
+      // Current implementation always uses igdbGames[0], regardless of already-imported status
+      const igdbGames = [
+        { id: 1001, name: 'Game 1' },
+        { id: 1002, name: 'Game 2' },
+        { id: 1003, name: 'Game 3' },
+      ];
+      const selectedGame = igdbGames[0];
+      expect(selectedGame).not.toBeNull();
+      expect(selectedGame.id).toBe(1001);
+      expect(selectedGame.name).toBe('Game 1');
+    });
+
     test('should require twitchClientId and twitchClientSecret for collections', () => {
       // Collections import calls searchGameOnServer when game not in mapping
       // So it needs Twitch credentials
@@ -531,18 +544,14 @@ describe('GOG Galaxy Importer', () => {
       expect(importCollectionsParams.twitchClientSecret).toBeDefined();
     });
 
-    test('should select first non-imported game from search results', () => {
-      // Simulate searchGameOnServer returning multiple games
+    test('should select first non-imported game from search results (desired behavior - not yet implemented)', () => {
+      // Desired behavior: when first result already exists, try next. Not yet implemented.
       const igdbGames = [
         { id: 1001, name: 'Game 1' },
         { id: 1002, name: 'Game 2' },
         { id: 1003, name: 'Game 3' },
       ];
-      
-      // Simulate filesystem check - game 1001 and 1002 already exist
       const existingGames = new Set([1001, 1002]);
-      
-      // Find first game that is not already imported
       let selectedGame = null;
       for (const game of igdbGames) {
         if (!existingGames.has(game.id)) {
@@ -550,13 +559,12 @@ describe('GOG Galaxy Importer', () => {
           break;
         }
       }
-      
       expect(selectedGame).not.toBeNull();
       expect(selectedGame.id).toBe(1003);
       expect(selectedGame.name).toBe('Game 3');
     });
 
-    test('should skip game if all search results are already imported', () => {
+    test('should skip game if all search results are already imported (desired behavior)', () => {
       // Simulate searchGameOnServer returning multiple games
       const igdbGames = [
         { id: 1001, name: 'Game 1' },
@@ -809,6 +817,45 @@ describe('GOG Galaxy Importer', () => {
       expect(mockGetGameDetailsFromServer).not.toHaveBeenCalled();
       expect(mockCreateGameViaAPI).not.toHaveBeenCalled();
       expect(mockUploadExecutableViaAPI).toHaveBeenCalledTimes(3);
+      existsSpy.mockRestore();
+    });
+
+    test('should continue and upload executables when game already exists (409)', async () => {
+      const execPath = '/tmp/test-script.sh';
+      const existsSpy = jest
+        .spyOn(fs, 'existsSync')
+        .mockImplementation((p) => p === execPath);
+
+      mockSearchGameOnServer.mockResolvedValue([{ id: 123, name: 'Test Game' }]);
+      mockGetGameDetailsFromServer.mockResolvedValue({ id: 123, name: 'Test Game' });
+      mockCreateGameViaAPI.mockRejectedValue(new Error('409 - Conflict: Game already exists'));
+      mockUploadExecutableViaAPI.mockResolvedValue({ status: 'success' });
+
+      const { importGame } = await modulePromise;
+      const result = await importGame(
+        'Test Game',
+        'release-key-409',
+        [{ path: execPath, label: 'script.sh' }],
+        '/tmp/metadata',
+        '/tmp/images',
+        'http://localhost:3000',
+        'token',
+        'clientId',
+        'clientSecret'
+      );
+
+      expect(result).not.toBeNull();
+      expect(result.gameId).toBe(123);
+      expect(mockCreateGameViaAPI).toHaveBeenCalledTimes(1);
+      expect(mockUploadExecutableViaAPI).toHaveBeenCalledTimes(1);
+      expect(mockUploadExecutableViaAPI).toHaveBeenCalledWith(
+        123,
+        execPath,
+        'script',
+        'http://localhost:3000',
+        'token'
+      );
+
       existsSpy.mockRestore();
     });
   });

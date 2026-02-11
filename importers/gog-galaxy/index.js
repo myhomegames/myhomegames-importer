@@ -4,7 +4,8 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
-import { searchGameOnServer, getGameDetailsFromServer, createGameViaAPI, uploadExecutableViaAPI, uploadCoverViaAPI, uploadBackgroundViaAPI, createCollectionViaAPI, updateCollectionGamesViaAPI, getCollectionsViaAPI } from '../common/igdb.js';
+import { searchGameOnServer, getGameDetailsFromServer, createGameViaAPI, uploadExecutableViaAPI, uploadCoverViaAPI, uploadBackgroundViaAPI, createCollectionViaAPI, updateCollectionGamesViaAPI, getCollectionsViaAPI, getExistingGameIds } from '../common/igdb.js';
+import * as reportLogger from '../common/reportLogger.js';
 
 /**
  * Sanitize executable name for filesystem (same logic as server)
@@ -39,7 +40,7 @@ function loadReleaseKeyMap(metadataPath) {
     }
     return { importMapPath, importMap, existed: true };
   } catch (error) {
-    console.warn(`Warning: Failed to read import map at ${importMapPath}: ${error.message}`);
+    reportLogger.warn(`Warning: Failed to read import map at ${importMapPath}: ${error.message}`);
     return { importMapPath, importMap: new Map(), existed: true };
   }
 }
@@ -61,6 +62,32 @@ function buildReleaseKeyIdMap(importMap) {
     }
   }
   return map;
+}
+
+/**
+ * Search IGDB by title, reducing by one word at a time if no results.
+ * When results are found, server already sorts by release date (closest first).
+ * @returns {{ igdbGames: Array|null, usedTitle: string|null }}
+ */
+async function searchGameWithReducingTitle(title, releaseDateForSearch, serverUrl, apiToken, twitchClientId, twitchClientSecret) {
+  let searchTitle = title.trim();
+  while (searchTitle) {
+    const igdbGames = await searchGameOnServer(searchTitle, serverUrl, apiToken, twitchClientId, twitchClientSecret, releaseDateForSearch);
+    if (igdbGames && igdbGames.length > 0) {
+      return { igdbGames, usedTitle: searchTitle };
+    }
+    const words = searchTitle.split(/\s+/);
+    if (words.length <= 1) break;
+    words.pop();
+    const nextTitle = words.join(' ');
+    if (nextTitle) {
+      reportLogger.log(`    No results, trying shorter: "${nextTitle}"`);
+      searchTitle = nextTitle;
+    } else {
+      break;
+    }
+  }
+  return { igdbGames: [], usedTitle: null };
 }
 
 function formatReleaseDateForMap(releaseDate) {
@@ -107,7 +134,8 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
     igdbId: overrideIgdbId,
     skipSearch = false,
     skipCreate = false,
-    skipIgdbFetch = false
+    skipIgdbFetch = false,
+    existingGameIds = new Set()
   } = options;
   let igdbGame = null;
   let gameId = null;
@@ -117,27 +145,33 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
     if (Number.isNaN(gameId)) {
       gameId = overrideIgdbId;
     }
-    console.log(`  Skipping IGDB name search (UPLOAD=true). Using IGDB ID: ${gameId}`);
+    reportLogger.log(`  Skipping IGDB name search (UPLOAD=true). Using IGDB ID: ${gameId}`);
     igdbGame = { id: gameId, name: primaryTitle };
   } else {
     if (skipSearch) {
-      console.warn('  Warning: skipSearch enabled but no IGDB ID provided; falling back to name search.');
+      reportLogger.warn('  Warning: skipSearch enabled but no IGDB ID provided; falling back to name search.');
     }
     // Search game on MyHomeGames server, trying each title until one succeeds
-    console.log(`  Searching on MyHomeGames server...`);
+    reportLogger.log(`  Searching on MyHomeGames server...`);
     let igdbGames = null;
     let usedTitle = null;
 
+    let releaseDateForSearch = gogReleaseDate != null && gogReleaseDate !== ''
+      ? (typeof gogReleaseDate === 'number' ? gogReleaseDate : parseInt(String(gogReleaseDate), 10))
+      : (releaseYear != null ? Math.floor(new Date(releaseYear, 0, 1).getTime() / 1000) : null);
+    if (releaseDateForSearch != null && Number.isNaN(releaseDateForSearch)) releaseDateForSearch = null;
+
     for (const title of titlesToTry) {
       if (titlesToTry.length > 1) {
-        console.log(`    Trying title: "${title}"`);
+        reportLogger.log(`    Trying title: "${title}"`);
       }
-      igdbGames = await searchGameOnServer(title, serverUrl, apiToken, twitchClientId, twitchClientSecret, releaseYear);
+      const { igdbGames: found, usedTitle: foundTitle } = await searchGameWithReducingTitle(title, releaseDateForSearch, serverUrl, apiToken, twitchClientId, twitchClientSecret);
+      igdbGames = found;
+      usedTitle = foundTitle;
 
       if (igdbGames && igdbGames.length > 0) {
-        usedTitle = title;
         if (titlesToTry.length > 1) {
-          console.log(`    Found results with title: "${title}"`);
+          reportLogger.log(`    Found results with title: "${foundTitle}"`);
         }
         break;
       }
@@ -145,26 +179,28 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
 
     if (!igdbGames || igdbGames.length === 0) {
       const allTitles = titlesToTry.join('", "');
-      console.warn(`  Warning: Game not found with any title, skipping: "${allTitles}"`);
+      reportLogger.warn(`  Warning: Game not found with any title, skipping: "${allTitles}"`);
       return null;
     }
 
-    // Use first game from search results (no longer filtering by already imported)
-    igdbGame = igdbGames[0];
+    // Prefer games not already on server; if all exist, use first for linking executables
+    const notExisting = igdbGames.filter((g) => !existingGameIds.has(g.id));
+    const chosen = notExisting.length > 0 ? notExisting[0] : igdbGames[0];
+    igdbGame = chosen;
     gameId = igdbGame.id;
-    console.log(`  Found: ${igdbGame.name} (ID: ${gameId})`);
+    reportLogger.log(`  Found: ${igdbGame.name} (ID: ${gameId})`);
   }
   
   // Get full game details from IGDB
   let fullGameData = null;
   if (skipIgdbFetch) {
-    console.log(`  UPLOAD=true -> skipping IGDB details fetch`);
+    reportLogger.log(`  UPLOAD=true -> skipping IGDB details fetch`);
   } else {
-    console.log(`  Fetching full game details...`);
+    reportLogger.log(`  Fetching full game details...`);
     try {
       fullGameData = await getGameDetailsFromServer(gameId, serverUrl, apiToken, twitchClientId, twitchClientSecret);
     } catch (error) {
-      console.warn(`  Warning: Failed to fetch full game details: ${error.message}`);
+      reportLogger.warn(`  Warning: Failed to fetch full game details: ${error.message}`);
     }
   }
   
@@ -172,11 +208,11 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
   // Use IGDB releaseDateFull timestamp if available, otherwise fallback to IGDB releaseDate (year), then GOG
   const igdbReleaseDateFull = fullGameData?.releaseDateFull?.timestamp || null;
   const igdbReleaseDate = fullGameData?.releaseDate || null;
-  console.log(`  Release date (IGDB full timestamp): ${igdbReleaseDateFull !== null ? igdbReleaseDateFull : 'null'}`);
+  reportLogger.log(`  Release date (IGDB full timestamp): ${igdbReleaseDateFull !== null ? igdbReleaseDateFull : 'null'}`);
   if (igdbReleaseDateFull) {
-    console.log(`  Release date (IGDB full ISO): ${new Date(igdbReleaseDateFull * 1000).toISOString().split('T')[0]}`);
+    reportLogger.log(`  Release date (IGDB full ISO): ${new Date(igdbReleaseDateFull * 1000).toISOString().split('T')[0]}`);
   }
-  console.log(`  Release date (GOG raw): ${gogReleaseDate !== null && gogReleaseDate !== undefined ? gogReleaseDate : 'null'}`);
+  reportLogger.log(`  Release date (GOG raw): ${gogReleaseDate !== null && gogReleaseDate !== undefined ? gogReleaseDate : 'null'}`);
   let releaseDate = igdbReleaseDateFull || igdbReleaseDate;
   if (!releaseDate && gogReleaseDate) {
     // Convert GOG Galaxy releaseDate (Unix timestamp as string) to ISO format
@@ -185,21 +221,21 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
       if (!isNaN(gogTimestamp)) {
         // IGDB uses Unix timestamp in seconds, so we keep it as is
         releaseDate = gogTimestamp;
-        console.log(`  Using GOG Galaxy release date as fallback: ${new Date(gogTimestamp * 1000).toISOString().split('T')[0]}`);
+        reportLogger.log(`  Using GOG Galaxy release date as fallback: ${new Date(gogTimestamp * 1000).toISOString().split('T')[0]}`);
       }
     } catch (e) {
       // Ignore parsing errors
     }
   }
-  console.log(`  Release date (final for gameData): ${releaseDate !== null && releaseDate !== undefined ? releaseDate : 'null'}`);
+  reportLogger.log(`  Release date (final for gameData): ${releaseDate !== null && releaseDate !== undefined ? releaseDate : 'null'}`);
   // Convert myRating from 0-5 scale to 0-10 scale (stars)
   const stars = myRating !== null && myRating !== undefined ? myRating * 2 : null;
   
   // Log stars when passing to server
   if (stars !== null) {
-    console.log(`  Stars (myRating ${myRating} -> stars ${stars}): ${stars}`);
+    reportLogger.log(`  Stars (myRating ${myRating} -> stars ${stars}): ${stars}`);
   } else if (myRating !== null && myRating !== undefined) {
-    console.log(`  Stars: null (myRating was ${myRating})`);
+    reportLogger.log(`  Stars: null (myRating was ${myRating})`);
   }
   
   const gameData = {
@@ -233,20 +269,20 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
   
   if (!skipCreate) {
     // Create game via API
-    console.log(`  Creating game via API...`);
+    reportLogger.log(`  Creating game via API...`);
     try {
       await createGameViaAPI(gameData, serverUrl, apiToken);
-      console.log(`  Created game via API`);
+      reportLogger.log(`  Created game via API`);
     } catch (error) {
       // If game already exists (409), that's fine, continue
       if (error.message.includes('409') || error.message.includes('already exists')) {
-        console.log(`  Game already exists, skipping creation`);
+        reportLogger.log(`  Game already exists, skipping creation`);
       } else {
         throw error;
       }
     }
   } else {
-    console.log(`  UPLOAD=true -> skipping game creation`);
+    reportLogger.log(`  UPLOAD=true -> skipping game creation`);
   }
   
   // Upload executables via API
@@ -264,14 +300,14 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
     
     try {
       await uploadExecutableViaAPI(gameId, exec.path, label, serverUrl, apiToken);
-      console.log(`  Uploaded executable: ${path.basename(exec.path)} (label: ${label})`);
+      reportLogger.log(`  Uploaded executable: ${path.basename(exec.path)} (label: ${label})`);
       executableCount++;
     } catch (error) {
-      console.warn(`  Warning: Failed to upload executable ${exec.path}: ${error.message}`);
+      reportLogger.warn(`  Warning: Failed to upload executable ${exec.path}: ${error.message}`);
     }
   }
   
-  console.log(`  Uploaded ${executableCount} executable(s)`);
+  reportLogger.log(`  Uploaded ${executableCount} executable(s)`);
   
   // Upload images from GOG Galaxy via API
   if (releaseKey) {
@@ -287,9 +323,9 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
       if (fs.existsSync(coverPath)) {
         try {
           await uploadCoverViaAPI(gameId, coverPath, serverUrl, apiToken);
-          console.log(`  Uploaded cover: ${path.basename(coverPath)}`);
+          reportLogger.log(`  Uploaded cover: ${path.basename(coverPath)}`);
         } catch (error) {
-          console.warn(`  Warning: Failed to upload cover: ${error.message}`);
+          reportLogger.warn(`  Warning: Failed to upload cover: ${error.message}`);
         }
         break;
       }
@@ -307,9 +343,9 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
       if (fs.existsSync(bgPath)) {
         try {
           await uploadBackgroundViaAPI(gameId, bgPath, serverUrl, apiToken);
-          console.log(`  Uploaded background: ${path.basename(bgPath)}`);
+          reportLogger.log(`  Uploaded background: ${path.basename(bgPath)}`);
         } catch (error) {
-          console.warn(`  Warning: Failed to upload background: ${error.message}`);
+          reportLogger.warn(`  Warning: Failed to upload background: ${error.message}`);
         }
         break;
       }
@@ -333,7 +369,7 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
  * For games not in the map, it searches the server for IGDB ID, then searches filesystem.
  */
 async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKeyToIgdbIdMap, tagsData, gamesByReleaseKey, serverUrl, apiToken, twitchClientId, twitchClientSecret) {
-  console.log('\n=== Importing Collections ===');
+  reportLogger.log('\n=== Importing Collections ===');
   
   // Get existing collections via API
   const existingCollections = new Set();
@@ -345,7 +381,7 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
       }
     }
   } catch (error) {
-    console.warn(`  Warning: Failed to get existing collections: ${error.message}`);
+    reportLogger.warn(`  Warning: Failed to get existing collections: ${error.message}`);
   }
   
   // Group games by tag with release date info
@@ -367,7 +403,7 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
   for (const [tag, releaseKeysWithDate] of tagGamesMap) {
     // Check if collection already exists
     if (existingCollections.has(tag.toLowerCase())) {
-      console.log(`  Skipping existing collection: ${tag}`);
+      reportLogger.log(`  Skipping existing collection: ${tag}`);
       continue;
     }
     
@@ -407,28 +443,24 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
               foundIgdbId = titleToIgdbIdCache.get(title);
               if (!foundIgdbId) {
                 try {
-                  // Extract year from releaseDate if available
-                  let releaseYear = null;
-                  if (gameData.releaseYear) {
-                    releaseYear = gameData.releaseYear;
-                  } else if (releaseDate) {
-                    try {
-                      const releaseDateTimestamp = parseInt(releaseDate, 10);
-                      if (!isNaN(releaseDateTimestamp)) {
-                        const releaseDateObj = new Date(releaseDateTimestamp * 1000);
-                        releaseYear = releaseDateObj.getFullYear();
-                      }
-                    } catch (e) {
-                      // Ignore parsing errors
-                    }
+                  let releaseDateForSearch = null;
+                  if (gameData.releaseDate) {
+                    const ts = parseInt(gameData.releaseDate, 10);
+                    if (!Number.isNaN(ts)) releaseDateForSearch = ts;
                   }
-                  
-                  const igdbGames = await searchGameOnServer(title, serverUrl, apiToken, twitchClientId, twitchClientSecret, releaseYear);
+                  if (releaseDateForSearch == null && gameData.releaseYear != null) {
+                    releaseDateForSearch = Math.floor(new Date(gameData.releaseYear, 0, 1).getTime() / 1000);
+                  }
+                  if (releaseDateForSearch == null && releaseDate) {
+                    const ts = parseInt(releaseDate, 10);
+                    if (!Number.isNaN(ts)) releaseDateForSearch = ts;
+                  }
+
+                  const { igdbGames, usedTitle: foundTitle } = await searchGameWithReducingTitle(title, releaseDateForSearch, serverUrl, apiToken, twitchClientId, twitchClientSecret);
                   if (igdbGames && igdbGames.length > 0) {
-                    // Use first game from search results
                     foundIgdbId = igdbGames[0].id;
                     titleToIgdbIdCache.set(title, foundIgdbId);
-                    usedTitle = title;
+                    usedTitle = foundTitle;
                   }
                 } catch (error) {
                   // If search fails, continue with next title
@@ -572,10 +604,10 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
     }
     
     if (missingGameCount > 0) {
-      console.log(`    Note: ${missingGameCount} game(s) from this collection were not found (skipped)`);
+      reportLogger.log(`    Note: ${missingGameCount} game(s) from this collection were not found (skipped)`);
       // Log details of missing games
       for (const missing of missingGames) {
-        console.log(`      - Title: "${missing.title}", ReleaseKey: ${missing.releaseKey}, IGDB ID: ${missing.igdbId || 'not found'}`);
+        reportLogger.log(`      - Title: "${missing.title}", ReleaseKey: ${missing.releaseKey}, IGDB ID: ${missing.igdbId || 'not found'}`);
       }
     }
     
@@ -596,15 +628,15 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
     
     if (uniqueGameIds.length !== gameIds.length) {
       const duplicateCount = gameIds.length - uniqueGameIds.length;
-      console.log(`    Note: Removed ${duplicateCount} duplicate game ID(s) from collection`);
+      reportLogger.log(`    Note: Removed ${duplicateCount} duplicate game ID(s) from collection`);
     }
     
     // Log games with IGDB ID and release date
     if (uniqueGameIdsWithDates.length > 0) {
-      console.log(`    Games in collection (${uniqueGameIdsWithDates.length}):`);
+      reportLogger.log(`    Games in collection (${uniqueGameIdsWithDates.length}):`);
       for (const { gameId, releaseDate } of uniqueGameIdsWithDates) {
         const releaseDateStr = releaseDate ? new Date(parseInt(releaseDate, 10) * 1000).toISOString().split('T')[0] : 'N/A';
-        console.log(`      - IGDB ID: ${gameId}, Release Date: ${releaseDateStr} (timestamp: ${releaseDate || 'null'})`);
+        reportLogger.log(`      - IGDB ID: ${gameId}, Release Date: ${releaseDateStr} (timestamp: ${releaseDate || 'null'})`);
       }
     }
     
@@ -618,19 +650,19 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
         await updateCollectionGamesViaAPI(collectionId, uniqueGameIds, serverUrl, apiToken);
       }
       
-      console.log(`  Created collection: ${tag} (ID: ${collectionId}, ${uniqueGameIds.length} games)`);
+      reportLogger.log(`  Created collection: ${tag} (ID: ${collectionId}, ${uniqueGameIds.length} games)`);
       importedCount++;
     } catch (error) {
       // If collection already exists (409), that's fine, skip it
       if (error.message.includes('409') || error.message.includes('already exists')) {
-        console.log(`  Skipping existing collection: ${tag}`);
+        reportLogger.log(`  Skipping existing collection: ${tag}`);
       } else {
-        console.warn(`  Warning: Failed to create collection ${tag}: ${error.message}`);
+        reportLogger.warn(`  Warning: Failed to create collection ${tag}: ${error.message}`);
       }
     }
   }
   
-  console.log(`\nImported ${importedCount} collections`);
+  reportLogger.log(`\nImported ${importedCount} collections`);
 }
 
 /**
@@ -652,10 +684,10 @@ export async function importFromGOGGalaxy(config) {
     upload = false,
   } = config;
 
-  console.log('=== GOG Galaxy Importer ===\n');
-  console.log(`GOG Galaxy DB: ${galaxyDbPath}`);
-  console.log(`GOG Galaxy Images: ${galaxyImagesPath}`);
-  console.log(`MyHomeGames Metadata: ${metadataPath}\n`);
+  reportLogger.log('=== GOG Galaxy Importer ===\n');
+  reportLogger.log(`GOG Galaxy DB: ${galaxyDbPath}`);
+  reportLogger.log(`GOG Galaxy Images: ${galaxyImagesPath}`);
+  reportLogger.log(`MyHomeGames Metadata: ${metadataPath}\n`);
   
   // Validate paths
   if (!fs.existsSync(galaxyDbPath)) {
@@ -665,7 +697,9 @@ export async function importFromGOGGalaxy(config) {
   if (!fs.existsSync(metadataPath)) {
     throw new Error(`Metadata path does not exist: ${metadataPath}`);
   }
-  
+
+  reportLogger.init(metadataPath);
+
   if (!serverUrl) {
     throw new Error('SERVER_URL is required (e.g., http://localhost:3000)');
   }
@@ -680,13 +714,13 @@ export async function importFromGOGGalaxy(config) {
 
   const { importMapPath, importMap, existed: importMapExists } = loadReleaseKeyMap(metadataPath);
   if (importMapExists) {
-    console.log(`Loaded ${importMap.size} imported games from: ${importMapPath}`);
+    reportLogger.log(`Loaded ${importMap.size} imported games from: ${importMapPath}`);
   } else {
-    console.log(`No existing import map found. Will create: ${importMapPath}`);
+    reportLogger.log(`No existing import map found. Will create: ${importMapPath}`);
   }
   
   // Open GOG Galaxy database
-  console.log('Opening GOG Galaxy database...');
+  reportLogger.log('Opening GOG Galaxy database...');
   const db = new Database(galaxyDbPath, { readonly: true });
   
   try {
@@ -696,9 +730,9 @@ export async function importFromGOGGalaxy(config) {
       // GamePieces.value is a JSON object containing the title
       // PlayTasks links releaseKey to playTaskId
       // PlayTaskLaunchParameters contains executablePath linked via playTaskId
-      console.log('\n=== Querying Games ===');
+      reportLogger.log('\n=== Querying Games ===');
     if (search) {
-      console.log(`Filtering by search term: "${search}"\n`);
+      reportLogger.log(`Filtering by search term: "${search}"\n`);
     }
     const gamesQuery = db.prepare(`
       SELECT 
@@ -727,7 +761,7 @@ export async function importFromGOGGalaxy(config) {
     `);
     
     const games = search ? gamesQuery.all(search) : gamesQuery.all();
-    console.log(`Found ${games.length} game entries to import\n`);
+    reportLogger.log(`Found ${games.length} game entries to import\n`);
     
     // Group games by releaseKey to handle multiple executables per game
     // Note: It's normal to have the same releaseKey multiple times in query results
@@ -812,7 +846,7 @@ export async function importFromGOGGalaxy(config) {
       gameData.titles = Array.from(gameData.titles);
     }
     
-    console.log(`Found ${gamesByReleaseKey.size} unique games (some may have multiple executables)\n`);
+    reportLogger.log(`Found ${gamesByReleaseKey.size} unique games (some may have multiple executables)\n`);
     
     // Map to track releaseKey -> gameId mapping (gameId is the IGDB ID used as folder name)
     const gameReleaseKeyMap = new Map();
@@ -829,9 +863,18 @@ export async function importFromGOGGalaxy(config) {
     
     // Process all games (gamesByReleaseKey already groups by releaseKey, so each releaseKey appears only once)
     const totalGames = gamesByReleaseKey.size;
+
+    // Fetch existing game IDs so IGDB search results never include games already on server
+    let existingGameIds = new Set();
+    try {
+      existingGameIds = await getExistingGameIds(serverUrl, apiToken);
+      reportLogger.log(`Loaded ${existingGameIds.size} existing game ID(s) from server`);
+    } catch (err) {
+      reportLogger.warn(`Could not fetch existing game IDs: ${err.message} (IGDB results will not be filtered)`);
+    }
     
     // Import each game (processing all executables together)
-    console.log(`=== Importing Games (${totalGames} games) ===`);
+    reportLogger.log(`=== Importing Games (${totalGames} games) ===`);
     let successCount = 0;
     let skipCount = 0;
     let currentIndex = 0;
@@ -839,20 +882,20 @@ export async function importFromGOGGalaxy(config) {
     for (const [releaseKey, gameData] of gamesByReleaseKey) {
       currentIndex++;
       
-      console.log(`[${currentIndex}/${totalGames}] Processing game: ${gameData.title}`);
-      console.log(`  Release date (GOG from DB): ${gameData.releaseDate !== null && gameData.releaseDate !== undefined ? gameData.releaseDate : 'null'}`);
+      reportLogger.log(`[${currentIndex}/${totalGames}] Processing game: ${gameData.title}`);
+      reportLogger.log(`  Release date (GOG from DB): ${gameData.releaseDate !== null && gameData.releaseDate !== undefined ? gameData.releaseDate : 'null'}`);
 
       const existingEntry = importMap.get(releaseKey);
       const existingIgdbId = existingEntry?.igdbId || existingEntry;
       const shouldForceUpload = upload && !!existingIgdbId;
       if (existingIgdbId && !shouldForceUpload) {
-        console.log(`  Skipping already imported releaseKey: ${releaseKey} (IGDB ID: ${existingIgdbId})`);
+        reportLogger.log(`  Skipping already imported releaseKey: ${releaseKey} (IGDB ID: ${existingIgdbId})`);
         skipCount++;
         continue;
       }
 
       if (shouldForceUpload) {
-        console.log(`  UPLOAD=true -> reimporting releaseKey: ${releaseKey} (IGDB ID: ${existingIgdbId})`);
+        reportLogger.log(`  UPLOAD=true -> reimporting releaseKey: ${releaseKey} (IGDB ID: ${existingIgdbId})`);
       }
       
       try {
@@ -876,11 +919,12 @@ export async function importFromGOGGalaxy(config) {
                 skipCreate: true,
                 skipIgdbFetch: true
               }
-            : undefined
+            : { existingGameIds }
         );
         
         if (result && result.gameId) {
           successCount++;
+          existingGameIds.add(result.igdbId ?? result.gameId);
           gameReleaseKeyMap.set(releaseKey, result.gameId);
           // Also store the IGDB ID mapping
           if (result.igdbId) {
@@ -903,7 +947,7 @@ export async function importFromGOGGalaxy(config) {
           skipCount++;
         }
       } catch (error) {
-        console.error(`  [${currentIndex}/${totalGames}] Error importing ${gameData.title}:`, error.message);
+        reportLogger.error(`  [${currentIndex}/${totalGames}] Error importing ${gameData.title}:`, error.message);
         skipCount++;
       }
     }
@@ -911,15 +955,15 @@ export async function importFromGOGGalaxy(config) {
     if (importMapDirty) {
       try {
         saveReleaseKeyMap(importMapPath, importMap);
-        console.log(`Saved import map: ${importMapPath}`);
+        reportLogger.log(`Saved import map: ${importMapPath}`);
       } catch (error) {
-        console.warn(`Warning: Failed to save import map: ${error.message}`);
+        reportLogger.warn(`Warning: Failed to save import map: ${error.message}`);
       }
     }
     
-      console.log(`\n=== Import Summary ===`);
-      console.log(`Successfully imported: ${successCount}`);
-      console.log(`Skipped: ${skipCount}`);
+      reportLogger.log(`\n=== Import Summary ===`);
+      reportLogger.log(`Successfully imported: ${successCount}`);
+      reportLogger.log(`Skipped: ${skipCount}`);
       
       // Import collections (unless games-only mode)
       if (!gamesOnly) {
@@ -944,10 +988,10 @@ export async function importFromGOGGalaxy(config) {
         await importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKeyToIgdbIdMap, tagsData, gamesByReleaseKey, serverUrl, apiToken, twitchClientId, twitchClientSecret);
       }
       } else {
-        console.log('\n=== Skipping Collections (--games-only mode) ===');
+        reportLogger.log('\n=== Skipping Collections (--games-only mode) ===');
       }
     } else {
-      console.log('\n=== Skipping Games (--collections-only mode) ===');
+      reportLogger.log('\n=== Skipping Games (--collections-only mode) ===');
       
       // Import only collections - need to get game data for mapping
       // First, get all games from GamePieces to build gamesByReleaseKey map
@@ -1081,9 +1125,10 @@ export async function importFromGOGGalaxy(config) {
     
   } finally {
     db.close();
+    reportLogger.close();
   }
   
-  console.log('\n=== Import Complete ===');
+  reportLogger.log('\n=== Import Complete ===');
 }
 
 export { importGame };

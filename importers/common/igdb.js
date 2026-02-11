@@ -74,24 +74,83 @@ export async function getGameDetailsFromServer(gameId, serverUrl, apiToken, twit
 }
 
 /**
+ * Get existing game IDs from server (for filtering IGDB search results)
+ * @param {string} serverUrl - MyHomeGames server URL
+ * @param {string} apiToken - API token for authentication
+ * @returns {Promise<Set<number>>} - Set of existing IGDB game IDs
+ */
+export async function getExistingGameIds(serverUrl, apiToken) {
+  return new Promise((resolve, reject) => {
+    try {
+      const url = new URL(`${serverUrl}/games/ids`);
+      const isHttps = url.protocol === 'https:';
+      const httpModule = isHttps ? https : http;
+
+      const options = {
+        hostname: url.hostname,
+        port: url.port || (isHttps ? 443 : 80),
+        path: url.pathname + url.search,
+        method: 'GET',
+        headers: {
+          'X-Auth-Token': apiToken,
+          'Content-Type': 'application/json',
+        },
+      };
+      if (isHttps) {
+        options.rejectUnauthorized = false;
+      }
+
+      const req = httpModule.request(options, (res) => {
+        let data = '';
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
+          try {
+            if (res.statusCode !== 200) {
+              const err = JSON.parse(data || '{}');
+              reject(new Error(err.error || `HTTP ${res.statusCode}`));
+              return;
+            }
+            const json = JSON.parse(data);
+            const ids = Array.isArray(json.ids) ? json.ids : [];
+            resolve(new Set(ids.map((id) => Number(id)).filter((n) => !Number.isNaN(n))));
+          } catch (e) {
+            reject(new Error(`Failed to parse server response: ${e.message}`));
+          }
+        });
+      });
+      req.on('error', (err) => reject(new Error(`Request failed: ${err.message}`)));
+      req.end();
+    } catch (e) {
+      reject(new Error(`Invalid server URL: ${e.message}`));
+    }
+  });
+}
+
+/**
  * Search game on MyHomeGames server (which searches IGDB)
+ * Uses full release date when provided so the server can return the closest match first.
  * @param {string} title - Game title to search
  * @param {string} serverUrl - MyHomeGames server URL (e.g., http://localhost:3000)
  * @param {string} apiToken - API token for authentication
  * @param {string} twitchClientId - Twitch Client ID (for IGDB)
  * @param {string} twitchClientSecret - Twitch Client Secret (for IGDB)
- * @param {number|null} year - Optional release year to filter results
- * @returns {Promise<Array<Object>>} - Array of game objects with id and name, or empty array if not found
+ * @param {number|string|null} releaseDate - Optional full release date: Unix timestamp (seconds) or "YYYY-MM-DD", used to sort by closest match
+ * @returns {Promise<Array<Object>>} - Array of game objects with id and name (and releaseDateFull when from server), sorted by closest date first if releaseDate was passed
  */
-export async function searchGameOnServer(title, serverUrl, apiToken, twitchClientId, twitchClientSecret, year = null) {
+export async function searchGameOnServer(title, serverUrl, apiToken, twitchClientId, twitchClientSecret, releaseDate = null) {
   return new Promise((resolve, reject) => {
     try {
       const url = new URL(`${serverUrl}/igdb/search`);
       url.searchParams.set('q', title);
       url.searchParams.set('clientId', twitchClientId);
       url.searchParams.set('clientSecret', twitchClientSecret);
-      if (year !== null && year !== undefined) {
-        url.searchParams.set('year', String(year));
+      if (releaseDate !== null && releaseDate !== undefined && releaseDate !== '') {
+        const ts = typeof releaseDate === 'number' ? releaseDate : parseInt(String(releaseDate), 10);
+        if (!Number.isNaN(ts)) {
+          url.searchParams.set('releaseDate', String(ts < 10000000000 ? ts : Math.floor(ts / 1000)));
+        } else if (typeof releaseDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(releaseDate.trim())) {
+          url.searchParams.set('releaseDate', releaseDate.trim());
+        }
       }
 
       const isHttps = url.protocol === 'https:';
