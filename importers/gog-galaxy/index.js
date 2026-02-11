@@ -184,10 +184,15 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
     }
 
     // Prefer games not already on server; if all exist, use first for linking executables
-    const notExisting = igdbGames.filter((g) => !existingGameIds.has(g.id));
+    const notExisting = igdbGames.filter((g) => !existingGameIds.has(Number(g.id)));
     const chosen = notExisting.length > 0 ? notExisting[0] : igdbGames[0];
     igdbGame = chosen;
     gameId = igdbGame.id;
+    if (notExisting.length === 0) {
+      reportLogger.log(`  All ${igdbGames.length} search result(s) already on server, using first for linking`);
+    } else if (notExisting.length < igdbGames.length) {
+      reportLogger.log(`  Filtered out ${igdbGames.length - notExisting.length} existing game(s) from search`);
+    }
     reportLogger.log(`  Found: ${igdbGame.name} (ID: ${gameId})`);
   }
   
@@ -871,6 +876,9 @@ export async function importFromGOGGalaxy(config) {
       reportLogger.log(`Loaded ${existingGameIds.size} existing game ID(s) from server`);
     } catch (err) {
       reportLogger.warn(`Could not fetch existing game IDs: ${err.message} (IGDB results will not be filtered)`);
+      if (err.message.includes('404')) {
+        reportLogger.warn(`Tip: Ensure the server is updated with GET /games/ids endpoint`);
+      }
     }
     
     // Import each game (processing all executables together)
@@ -924,7 +932,8 @@ export async function importFromGOGGalaxy(config) {
         
         if (result && result.gameId) {
           successCount++;
-          existingGameIds.add(result.igdbId ?? result.gameId);
+          const idToAdd = Number(result.igdbId ?? result.gameId);
+          if (!Number.isNaN(idToAdd)) existingGameIds.add(idToAdd);
           gameReleaseKeyMap.set(releaseKey, result.gameId);
           // Also store the IGDB ID mapping
           if (result.igdbId) {

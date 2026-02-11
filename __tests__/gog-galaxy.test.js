@@ -11,6 +11,7 @@ const mockUploadBackgroundViaAPI = jest.fn();
 const mockCreateCollectionViaAPI = jest.fn();
 const mockUpdateCollectionGamesViaAPI = jest.fn();
 const mockGetCollectionsViaAPI = jest.fn();
+const mockGetExistingGameIds = jest.fn();
 let mockDbRows = [];
 
 jest.unstable_mockModule('../importers/common/igdb.js', () => ({
@@ -23,6 +24,7 @@ jest.unstable_mockModule('../importers/common/igdb.js', () => ({
   createCollectionViaAPI: mockCreateCollectionViaAPI,
   updateCollectionGamesViaAPI: mockUpdateCollectionGamesViaAPI,
   getCollectionsViaAPI: mockGetCollectionsViaAPI,
+  getExistingGameIds: mockGetExistingGameIds,
 }));
 
 class MockDatabase {
@@ -677,6 +679,7 @@ describe('GOG Galaxy Importer', () => {
 
   describe('Executable upload', () => {
     beforeEach(() => {
+      mockGetExistingGameIds.mockResolvedValue(new Set());
       mockSearchGameOnServer.mockResolvedValue([{ id: 123, name: 'Test Game' }]);
       mockGetGameDetailsFromServer.mockResolvedValue({
         id: 123,
@@ -702,6 +705,7 @@ describe('GOG Galaxy Importer', () => {
       mockCreateCollectionViaAPI.mockReset();
       mockUpdateCollectionGamesViaAPI.mockReset();
       mockGetCollectionsViaAPI.mockReset();
+      mockGetExistingGameIds.mockReset();
     });
 
     test('should upload executables for valid paths', async () => {
@@ -862,6 +866,7 @@ describe('GOG Galaxy Importer', () => {
 
   describe('Import map update on UPDATE', () => {
     test('should backfill releaseDate and stars when missing', async () => {
+      mockGetExistingGameIds.mockResolvedValue(new Set());
       const releaseKey = 'generic_123456';
       const igdbId = 999;
       const gogReleaseDate = '1700000000';
