@@ -4,7 +4,7 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
-import { searchGameOnServer, getGameDetailsFromServer, createGameViaAPI, uploadExecutableViaAPI, uploadCoverViaAPI, uploadBackgroundViaAPI, createCollectionViaAPI, updateCollectionGamesViaAPI, getCollectionsViaAPI, getExistingGameIds } from '../common/igdb.js';
+import { searchGameOnServer, getGameDetailsFromServer, createGameViaAPI, getGameViaAPI, updateGameViaAPI, uploadExecutableViaAPI, uploadCoverViaAPI, uploadBackgroundViaAPI, createCollectionViaAPI, updateCollectionGamesViaAPI, getCollectionsViaAPI, getExistingGameIds } from '../common/igdb.js';
 import * as reportLogger from '../common/reportLogger.js';
 
 /**
@@ -72,8 +72,23 @@ function buildReleaseKeyIdMap(importMap) {
 async function searchGameWithReducingTitle(title, releaseDateForSearch, serverUrl, apiToken, twitchClientId, twitchClientSecret) {
   let searchTitle = title.trim();
   while (searchTitle) {
-    const igdbGames = await searchGameOnServer(searchTitle, serverUrl, apiToken, twitchClientId, twitchClientSecret, releaseDateForSearch);
+    let igdbGames = await searchGameOnServer(searchTitle, serverUrl, apiToken, twitchClientId, twitchClientSecret, releaseDateForSearch);
     if (igdbGames && igdbGames.length > 0) {
+      if (releaseDateForSearch != null && releaseDateForSearch !== '') {
+        const ts = typeof releaseDateForSearch === 'number' ? releaseDateForSearch : parseInt(String(releaseDateForSearch), 10);
+        const targetTs = !Number.isNaN(ts) && ts > 0 ? (ts < 10000000000 ? ts : Math.floor(ts / 1000)) : null;
+        if (targetTs != null) {
+          igdbGames = [...igdbGames].sort((a, b) => {
+            const aTs = a.releaseDateFull?.timestamp;
+            const bTs = b.releaseDateFull?.timestamp;
+            const aDist = aTs != null ? Math.abs(aTs - targetTs) : Infinity;
+            const bDist = bTs != null ? Math.abs(bTs - targetTs) : Infinity;
+            if (aDist !== bDist) return aDist - bDist;
+            if (aTs != null && bTs != null) return aTs - bTs;
+            return (aTs != null ? 0 : 1) - (bTs != null ? 0 : 1);
+          });
+        }
+      }
       return { igdbGames, usedTitle: searchTitle };
     }
     const words = searchTitle.split(/\s+/);
@@ -125,6 +140,56 @@ function formatReleaseDateForMap(releaseDate) {
 }
 
 /**
+ * Build { year, month?, day? } for server PUT from GOG releaseDate (unix ts string) and/or releaseYear.
+ * @param {string|null} gogReleaseDate - Unix timestamp as string
+ * @param {number|null} releaseYear - Year only
+ * @returns {{ year: number, month?: number, day?: number }|null}
+ */
+function gogReleaseToYearMonthDay(gogReleaseDate, releaseYear) {
+  if (gogReleaseDate != null && gogReleaseDate !== '') {
+    const ts = parseInt(gogReleaseDate, 10);
+    if (!Number.isNaN(ts)) {
+      const d = new Date(ts * 1000);
+      return { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate() };
+    }
+  }
+  if (releaseYear != null && !Number.isNaN(Number(releaseYear))) {
+    return { year: Number(releaseYear) };
+  }
+  return null;
+}
+
+/**
+ * Returns true if incoming GOG data has "more" than the existing library game (stars, date, or executables).
+ * @param {Object} currentGame - Game from getGameViaAPI (stars, year, month, day, executables)
+ * @param {number|null} incomingStars - Stars 0-10 from GOG myRating
+ * @param {{ year: number, month?: number, day?: number }|null} incomingDate - From gogReleaseToYearMonthDay
+ * @param {number} incomingExecutablesCount - Count of GOG executables with existing path
+ */
+function incomingHasMoreDataThanExisting(currentGame, incomingStars, incomingDate, incomingExecutablesCount) {
+  const existingStars = currentGame.stars ?? null;
+  const existingHasDate = currentGame.year != null || currentGame.month != null || currentGame.day != null;
+  const existingExecutablesCount = (currentGame.executables && Array.isArray(currentGame.executables)) ? currentGame.executables.length : 0;
+  const hasMoreStars = incomingStars != null && (existingStars == null || incomingStars > existingStars);
+  const hasMoreDate = incomingDate != null && (!existingHasDate || (incomingDate.day != null && (currentGame.day == null)) || (incomingDate.month != null && (currentGame.month == null)));
+  const hasMoreExecutables = incomingExecutablesCount > 0 && (existingExecutablesCount === 0 || incomingExecutablesCount > existingExecutablesCount);
+  return hasMoreStars || hasMoreDate || hasMoreExecutables;
+}
+
+/**
+ * True if the IGDB result title matches the game we're importing (GOG title).
+ * Prefer existing library entry when it's the same game instead of creating a "Trilogy" etc.
+ */
+function existingTitleMatchesIncoming(igdbName, primaryTitle) {
+  if (!igdbName || !primaryTitle) return false;
+  const a = String(igdbName).toLowerCase().trim();
+  const b = String(primaryTitle).toLowerCase().trim();
+  if (a === b) return true;
+  if (a.includes(b) || b.includes(a)) return true;
+  return false;
+}
+
+/**
  * Import a single game
  * @param {string|Array<string>} gameTitles - Game title(s) to try (can be array for multiple titles)
  * @param {string} releaseKey - GOG Galaxy release key
@@ -153,6 +218,7 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
   } = options;
   let igdbGame = null;
   let gameId = null;
+  let overwriteExisting = false;
 
   if (overrideIgdbId) {
     gameId = Number(overrideIgdbId);
@@ -197,23 +263,62 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
       return null;
     }
 
-    // Prefer games not already on server; if all exist, use first for linking executables
-    const notExisting = igdbGames.filter((g) => !existingGameIds.has(Number(g.id)));
-    const chosen = notExisting.length > 0 ? notExisting[0] : igdbGames[0];
+    const incomingStars = myRating != null && myRating !== '' ? myRating * 2 : null;
+    const incomingDate = gogReleaseToYearMonthDay(gogReleaseDate || null, releaseYear);
+    const incomingExecutablesCount = (executables || []).filter((e) => e.path && fs.existsSync(e.path)).length;
+
+    // Results are sorted by release date (closest to GOG date first). Prefer best date match:
+    // if the first in order is not in library, use it (create). Else consider existing games for overwrite.
+    let chosen = null;
+    let overwriteExisting = false;
+    for (const igdb of igdbGames) {
+      if (!existingGameIds.has(Number(igdb.id))) {
+        chosen = igdb;
+        break;
+      }
+      try {
+        const currentGame = await getGameViaAPI(igdb.id, serverUrl, apiToken);
+        const hasMore = incomingHasMoreDataThanExisting(currentGame, incomingStars, incomingDate, incomingExecutablesCount);
+        const titleMatch = existingTitleMatchesIncoming(igdb.name, primaryTitle);
+        if (hasMore) {
+          chosen = igdb;
+          overwriteExisting = true;
+          reportLogger.log(`  Existing game has less data; will overwrite (ID: ${igdb.id})`);
+          break;
+        }
+        if (titleMatch) {
+          chosen = igdb;
+          overwriteExisting = true;
+          reportLogger.log(`  Existing game title matches GOG; will update (ID: ${igdb.id})`);
+          break;
+        }
+      } catch (e) {
+        reportLogger.warn(`  Could not fetch existing game ${igdb.id} (${igdb.name}): ${e.message}`);
+        const titleMatch = existingTitleMatchesIncoming(igdb.name, primaryTitle);
+        if (titleMatch) {
+          chosen = igdb;
+          overwriteExisting = true;
+          reportLogger.log(`  Existing game title matches GOG; will update (ID: ${igdb.id}) despite fetch error`);
+          break;
+        }
+      }
+    }
+    if (!chosen) {
+      chosen = igdbGames[0];
+      if (existingGameIds.has(Number(chosen.id))) {
+        reportLogger.log(`  All ${igdbGames.length} search result(s) already on server, using first for linking`);
+      }
+    }
     igdbGame = chosen;
     gameId = igdbGame.id;
-    if (notExisting.length === 0) {
-      reportLogger.log(`  All ${igdbGames.length} search result(s) already on server, using first for linking`);
-    } else if (notExisting.length < igdbGames.length) {
-      reportLogger.log(`  Filtered out ${igdbGames.length - notExisting.length} existing game(s) from search`);
-    }
     reportLogger.log(`  Found: ${igdbGame.name} (ID: ${gameId})`);
   }
   
-  // Get full game details from IGDB
+  // Get full game details from IGDB (skip when overwriting existing - we use GOG data for update)
   let fullGameData = null;
-  if (skipIgdbFetch) {
-    reportLogger.log(`  UPLOAD=true -> skipping IGDB details fetch`);
+  if (skipIgdbFetch || overwriteExisting) {
+    if (skipIgdbFetch) reportLogger.log(`  UPLOAD=true -> skipping IGDB details fetch`);
+    else if (overwriteExisting) reportLogger.log(`  Overwriting existing -> skipping IGDB details fetch`);
   } else {
     reportLogger.log(`  Fetching full game details...`);
     try {
@@ -283,7 +388,17 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
     similarGames: fullGameData?.similarGames || null,
   };
   
-  if (!skipCreate) {
+  if (overwriteExisting) {
+    const updates = {};
+    const overwriteStars = myRating != null && myRating !== '' ? myRating * 2 : null;
+    if (overwriteStars != null) updates.stars = overwriteStars;
+    const ymd = gogReleaseToYearMonthDay(gogReleaseDate || null, releaseYear);
+    if (ymd) Object.assign(updates, ymd);
+    if (Object.keys(updates).length > 0) {
+      await updateGameViaAPI(gameId, updates, serverUrl, apiToken);
+      reportLogger.log(`  Updated existing game via API (${Object.keys(updates).join(', ')})`);
+    }
+  } else if (!skipCreate) {
     // Create game via API
     reportLogger.log(`  Creating game via API...`);
     try {
@@ -653,6 +768,12 @@ async function importCollections(metadataPath, gameReleaseKeyMap, gameReleaseKey
       for (const { gameId, releaseDate } of uniqueGameIdsWithDates) {
         reportLogger.log(`      - IGDB ID: ${gameId}, Release Date: ${formatTimestampForLog(releaseDate)}`);
       }
+    }
+
+    // Skip empty collections (no games resolved)
+    if (uniqueGameIds.length === 0) {
+      reportLogger.log(`  Skipping empty collection: ${tag}`);
+      continue;
     }
     
     // Create collection via API

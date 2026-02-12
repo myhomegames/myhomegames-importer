@@ -145,12 +145,17 @@ export async function searchGameOnServer(title, serverUrl, apiToken, twitchClien
       url.searchParams.set('clientId', twitchClientId);
       url.searchParams.set('clientSecret', twitchClientSecret);
       if (releaseDate !== null && releaseDate !== undefined && releaseDate !== '') {
-        const ts = typeof releaseDate === 'number' ? releaseDate : parseInt(String(releaseDate), 10);
-        if (!Number.isNaN(ts)) {
-          url.searchParams.set('releaseDate', String(ts < 10000000000 ? ts : Math.floor(ts / 1000)));
-        } else if (typeof releaseDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(releaseDate.trim())) {
-          url.searchParams.set('releaseDate', releaseDate.trim());
+        let ts = null;
+        if (typeof releaseDate === 'number' && !Number.isNaN(releaseDate)) {
+          ts = releaseDate < 10000000000 ? releaseDate : Math.floor(releaseDate / 1000);
+        } else if (typeof releaseDate === 'string' && releaseDate.trim() !== '') {
+          const parsed = parseInt(String(releaseDate).trim(), 10);
+          if (!Number.isNaN(parsed)) ts = parsed < 10000000000 ? parsed : Math.floor(parsed / 1000);
+          else if (/^\d{4}-\d{2}-\d{2}$/.test(releaseDate.trim())) {
+            url.searchParams.set('releaseDate', releaseDate.trim());
+          }
         }
+        if (ts != null && ts > 0) url.searchParams.set('releaseDate', String(ts));
       }
 
       const isHttps = url.protocol === 'https:';
@@ -187,10 +192,11 @@ export async function searchGameOnServer(title, serverUrl, apiToken, twitchClien
 
             const response = JSON.parse(data);
             if (response.games && response.games.length > 0) {
-              // Return all games in format expected by importer (id and name)
+              // Return games with id, name, and releaseDateFull (for client-side sort by date when needed)
               resolve(response.games.map(game => ({
                 id: game.id,
                 name: game.name,
+                releaseDateFull: game.releaseDateFull || null,
               })));
             } else {
               resolve([]);
@@ -345,6 +351,31 @@ function makeMultipartRequest(method, urlString, apiToken, formDataFields) {
       reject(new Error(`Invalid server URL: ${e.message}`));
     }
   });
+}
+
+/**
+ * Get game from library via API
+ * @param {number} gameId - IGDB game ID
+ * @param {string} serverUrl - MyHomeGames server URL
+ * @param {string} apiToken - API token
+ * @returns {Promise<Object>} - Game data (title, stars, year, month, day, executables, ...)
+ */
+export async function getGameViaAPI(gameId, serverUrl, apiToken) {
+  const url = `${serverUrl}/games/${gameId}`;
+  return makeHttpRequest('GET', url, apiToken);
+}
+
+/**
+ * Update game fields via API (PUT /games/:gameId)
+ * @param {number} gameId - IGDB game ID
+ * @param {Object} updates - Allowed fields: title, summary, year, month, day, stars, genre, themes, platforms, gameEngines, gameModes, playerPerspectives, developers, publishers, executables, showTitle
+ * @param {string} serverUrl - MyHomeGames server URL
+ * @param {string} apiToken - API token
+ * @returns {Promise<Object>} - Response with updated game
+ */
+export async function updateGameViaAPI(gameId, updates, serverUrl, apiToken) {
+  const url = `${serverUrl}/games/${gameId}`;
+  return makeHttpRequest('PUT', url, apiToken, updates);
 }
 
 /**
