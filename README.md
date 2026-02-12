@@ -61,6 +61,7 @@ GOG Galaxy specific variables:
 - `SEARCH` - Filter games by title (case-insensitive, optional)
 - `GAMES_ONLY` - Import only games, skip collections (optional, boolean)
 - `COLLECTIONS_ONLY` - Import only collections, skip games (optional, boolean)
+- `GOG_EXCLUDE_NO_RELEASE_DATE` - Exclude GOG games that have no release date (optional, set to `true` to enable)
 
 **Note:** The API token is automatically loaded from `METADATA_PATH/tokens.json`. You must login via the web interface first to generate this file. The token is never read from environment variables or `.env` file for security reasons.
 
@@ -121,6 +122,9 @@ GAMES_ONLY=true node cli.js gog-galaxy --metadata-path /path/to/metadata
 # Import only collections (skip games)
 node cli.js gog-galaxy --metadata-path /path/to/metadata --collections-only
 COLLECTIONS_ONLY=true node cli.js gog-galaxy --metadata-path /path/to/metadata
+
+# Exclude GOG games without release date
+GOG_EXCLUDE_NO_RELEASE_DATE=true node cli.js gog-galaxy --metadata-path /path/to/metadata
 
 # Limit import to first 10 games (for testing)
 # Note: API token is loaded from METADATA_PATH/tokens.json (login via web interface first)

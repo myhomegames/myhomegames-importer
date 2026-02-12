@@ -176,6 +176,7 @@ async function main() {
     config.upload = uploadEnv === 'true' || uploadEnv === 'yes' || options.upload === true || false;
     config.gamesOnly = process.env.GAMES_ONLY === 'true' || options.games_only === true || options.gamesOnly === true || false;
     config.collectionsOnly = process.env.COLLECTIONS_ONLY === 'true' || options.collections_only === true || options.collectionsOnly === true || false;
+    config.excludeGogNoReleaseDate = process.env.GOG_EXCLUDE_NO_RELEASE_DATE === 'true' || options.exclude_gog_no_release_date === true || false;
     
     // Check required environment variables
     if (!config.serverUrl) {

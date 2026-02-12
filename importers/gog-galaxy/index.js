@@ -697,12 +697,18 @@ export async function importFromGOGGalaxy(config) {
     gamesOnly = false,
     collectionsOnly = false,
     upload = false,
+    excludeGogNoReleaseDate = false,
   } = config;
 
   reportLogger.log('=== GOG Galaxy Importer ===\n');
   reportLogger.log(`GOG Galaxy DB: ${galaxyDbPath}`);
   reportLogger.log(`GOG Galaxy Images: ${galaxyImagesPath}`);
-  reportLogger.log(`MyHomeGames Metadata: ${metadataPath}\n`);
+  reportLogger.log(`MyHomeGames Metadata: ${metadataPath}`);
+  if (excludeGogNoReleaseDate) {
+    reportLogger.log('Excluding GOG games without release date (GOG_EXCLUDE_NO_RELEASE_DATE=true)\n');
+  } else {
+    reportLogger.log('');
+  }
   
   // Validate paths
   if (!fs.existsSync(galaxyDbPath)) {
@@ -899,7 +905,14 @@ export async function importFromGOGGalaxy(config) {
     
     for (const [releaseKey, gameData] of gamesByReleaseKey) {
       currentIndex++;
-      
+
+      const hasReleaseDate = (gameData.releaseDate != null && gameData.releaseDate !== '') || (gameData.releaseYear != null);
+      if (excludeGogNoReleaseDate && !hasReleaseDate) {
+        reportLogger.log(`[${currentIndex}/${totalGames}] Skipping (no release date): ${gameData.title}`);
+        skipCount++;
+        continue;
+      }
+
       reportLogger.log(`[${currentIndex}/${totalGames}] Processing game: ${gameData.title}`);
       reportLogger.log(`  Release date (GOG from DB): ${formatTimestampForLog(gameData.releaseDate)}`);
 
