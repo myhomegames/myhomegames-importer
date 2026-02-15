@@ -5,6 +5,8 @@ import fs from 'fs';
 const mockSearchGameOnServer = jest.fn();
 const mockGetGameDetailsFromServer = jest.fn();
 const mockCreateGameViaAPI = jest.fn();
+const mockGetGameViaAPI = jest.fn();
+const mockUpdateGameViaAPI = jest.fn();
 const mockUploadExecutableViaAPI = jest.fn();
 const mockUploadCoverViaAPI = jest.fn();
 const mockUploadBackgroundViaAPI = jest.fn();
@@ -18,6 +20,8 @@ jest.unstable_mockModule('../importers/common/igdb.js', () => ({
   searchGameOnServer: mockSearchGameOnServer,
   getGameDetailsFromServer: mockGetGameDetailsFromServer,
   createGameViaAPI: mockCreateGameViaAPI,
+  getGameViaAPI: mockGetGameViaAPI,
+  updateGameViaAPI: mockUpdateGameViaAPI,
   uploadExecutableViaAPI: mockUploadExecutableViaAPI,
   uploadCoverViaAPI: mockUploadCoverViaAPI,
   uploadBackgroundViaAPI: mockUploadBackgroundViaAPI,
