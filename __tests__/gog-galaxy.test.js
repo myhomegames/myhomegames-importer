@@ -224,11 +224,11 @@ describe('GOG Galaxy Importer', () => {
       };
 
       if (fullGameData.cover) {
-        gameMetadata.igdbCover = fullGameData.cover;
+        gameMetadata.externalCoverUrl = fullGameData.cover;
       }
 
       if (fullGameData.background) {
-        gameMetadata.igdbBackground = fullGameData.background;
+        gameMetadata.externalBackgroundUrl = fullGameData.background;
       }
 
       if (fullGameData.criticRating !== null && fullGameData.criticRating !== undefined) {
@@ -254,8 +254,8 @@ describe('GOG Galaxy Importer', () => {
       expect(gameMetadata.month).toBe(11);
       expect(gameMetadata.day).toBe(15);
       expect(gameMetadata.genre).toEqual(['Action', 'Adventure']);
-      expect(gameMetadata.igdbCover).toBe('https://images.igdb.com/igdb/image/upload/t_1080p/co2f1v.jpg');
-      expect(gameMetadata.igdbBackground).toBe('https://images.igdb.com/igdb/image/upload/t_1080p/wnglmmjdbv6sipynrcji.jpg');
+      expect(gameMetadata.externalCoverUrl).toBe('https://images.igdb.com/igdb/image/upload/t_1080p/co2f1v.jpg');
+      expect(gameMetadata.externalBackgroundUrl).toBe('https://images.igdb.com/igdb/image/upload/t_1080p/wnglmmjdbv6sipynrcji.jpg');
       expect(gameMetadata.criticratings).toBe(8.5); // 85 / 10
       expect(gameMetadata.userratings).toBe(7.8); // 78 / 10
       expect(gameMetadata.themes).toEqual(['Fantasy']);
@@ -299,8 +299,8 @@ describe('GOG Galaxy Importer', () => {
       };
 
       // Optional fields should not be added if not present
-      expect(gameMetadata.igdbCover).toBeUndefined();
-      expect(gameMetadata.igdbBackground).toBeUndefined();
+      expect(gameMetadata.externalCoverUrl).toBeUndefined();
+      expect(gameMetadata.externalBackgroundUrl).toBeUndefined();
       expect(gameMetadata.criticratings).toBeUndefined();
       expect(gameMetadata.userratings).toBeUndefined();
       expect(gameMetadata.themes).toBeUndefined();
@@ -347,7 +347,7 @@ describe('GOG Galaxy Importer', () => {
       expect(gameMetadata.day).toBeNull();
     });
 
-    test('should include igdbCover and igdbBackground when available', () => {
+    test('should include externalCoverUrl and externalBackgroundUrl when available', () => {
       const fullGameData = {
         name: 'Test Game',
         cover: 'https://images.igdb.com/igdb/image/upload/t_1080p/test_cover.jpg',
@@ -359,15 +359,15 @@ describe('GOG Galaxy Importer', () => {
       };
 
       if (fullGameData.cover) {
-        gameMetadata.igdbCover = fullGameData.cover;
+        gameMetadata.externalCoverUrl = fullGameData.cover;
       }
 
       if (fullGameData.background) {
-        gameMetadata.igdbBackground = fullGameData.background;
+        gameMetadata.externalBackgroundUrl = fullGameData.background;
       }
 
-      expect(gameMetadata.igdbCover).toBe('https://images.igdb.com/igdb/image/upload/t_1080p/test_cover.jpg');
-      expect(gameMetadata.igdbBackground).toBe('https://images.igdb.com/igdb/image/upload/t_1080p/test_bg.jpg');
+      expect(gameMetadata.externalCoverUrl).toBe('https://images.igdb.com/igdb/image/upload/t_1080p/test_cover.jpg');
+      expect(gameMetadata.externalBackgroundUrl).toBe('https://images.igdb.com/igdb/image/upload/t_1080p/test_bg.jpg');
     });
 
     test('should handle null ratings correctly', () => {
