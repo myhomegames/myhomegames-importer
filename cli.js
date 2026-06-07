@@ -73,14 +73,13 @@ function parseArgs() {
 }
 
 /**
- * Load API token from tokens.json file
+ * Load API token from tokens/twitch-oauth-sessions.json
  * @param {string} metadataPath - Path to metadata directory
  * @returns {string|null} - Access token or null if not found
  */
 function loadTokenFromTokensFile(metadataPath) {
   try {
-    const tokensPath = path.join(metadataPath, 'tokens.json');
-    
+    const tokensPath = path.join(metadataPath, 'tokens', 'twitch-oauth-sessions.json');
     if (!fs.existsSync(tokensPath)) {
       return null;
     }
@@ -102,7 +101,7 @@ function loadTokenFromTokensFile(metadataPath) {
     
     return null;
   } catch (error) {
-    console.warn(`Warning: Failed to load token from tokens.json: ${error.message}`);
+    console.warn(`Warning: Failed to load token from twitch-oauth-sessions.json: ${error.message}`);
     return null;
   }
 }
@@ -157,13 +156,13 @@ async function main() {
     
     config.serverUrl = process.env.SERVER_URL || options.server_url || 'http://localhost:3000';
     
-    // Load API_TOKEN from tokens.json (never from .env)
+    // Load API_TOKEN from tokens/twitch-oauth-sessions.json (never from .env)
     config.apiToken = null;
     if (config.metadataPath) {
       const tokenFromFile = loadTokenFromTokensFile(config.metadataPath);
       if (tokenFromFile) {
         config.apiToken = tokenFromFile;
-        console.log('[INFO] Using API_TOKEN from tokens.json');
+        console.log('[INFO] Using API_TOKEN from tokens/twitch-oauth-sessions.json');
       }
     }
     
@@ -185,7 +184,7 @@ async function main() {
     }
     
     if (!config.apiToken) {
-      console.error('Error: API_TOKEN not found in tokens.json. Please login via the web interface first.');
+      console.error('Error: API_TOKEN not found in tokens/twitch-oauth-sessions.json. Please login via the web interface first.');
       process.exit(1);
     }
     

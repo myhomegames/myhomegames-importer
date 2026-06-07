@@ -12,7 +12,7 @@ More importers coming soon!
 
 - Node.js 18+
 - MyHomeGames server running and accessible
-- Valid authentication token (loaded from `METADATA_PATH/tokens.json` - login via web interface first)
+- Valid authentication token (loaded from `METADATA_PATH/tokens/twitch-oauth-sessions.json` - login via web interface first)
 - IGDB API credentials (Twitch Client ID and Secret) - required for game search via server
 
 ## Installation
@@ -63,7 +63,7 @@ GOG Galaxy specific variables:
 - `COLLECTIONS_ONLY` - Import only collections, skip games (optional, boolean)
 - `GOG_EXCLUDE_NO_RELEASE_DATE` - Exclude GOG games that have no release date (optional, set to `true` to enable)
 
-**Note:** The API token is automatically loaded from `METADATA_PATH/tokens.json`. You must login via the web interface first to generate this file. The token is never read from environment variables or `.env` file for security reasons.
+**Note:** The API token is automatically loaded from `METADATA_PATH/tokens/twitch-oauth-sessions.json`. You must login via the web interface first to generate this file. The token is never read from environment variables or `.env` file for security reasons.
 
 #### Using .env File
 
@@ -77,7 +77,7 @@ cp .env.example .env
 nano .env
 ```
 
-**Important:** The API token is NOT read from the `.env` file. It is automatically loaded from `METADATA_PATH/tokens.json`. You must login via the web interface first to generate this file.
+**Important:** The API token is NOT read from the `.env` file. It is automatically loaded from `METADATA_PATH/tokens/twitch-oauth-sessions.json`. You must login via the web interface first to generate this file.
 
 Then simply run:
 
@@ -95,7 +95,7 @@ The importer will automatically load variables from the `.env` file. See `.env.e
 node cli.js gog-galaxy
 
 # GOG Galaxy importer with environment variables
-# Note: API token is loaded from METADATA_PATH/tokens.json (login via web interface first)
+# Note: API token is loaded from METADATA_PATH/tokens/twitch-oauth-sessions.json (login via web interface first)
 METADATA_PATH=/path/to/metadata \
 SERVER_URL=http://localhost:3000 \
 TWITCH_CLIENT_ID=xxx \
@@ -127,7 +127,7 @@ COLLECTIONS_ONLY=true node cli.js gog-galaxy --metadata-path /path/to/metadata
 GOG_EXCLUDE_NO_RELEASE_DATE=true node cli.js gog-galaxy --metadata-path /path/to/metadata
 
 # Limit import to first 10 games (for testing)
-# Note: API token is loaded from METADATA_PATH/tokens.json (login via web interface first)
+# Note: API token is loaded from METADATA_PATH/tokens/twitch-oauth-sessions.json (login via web interface first)
 LIMIT=10 \
 METADATA_PATH=/path/to/metadata \
 SERVER_URL=http://localhost:3000 \
@@ -193,7 +193,7 @@ The GOG Galaxy importer queries the following database tables:
 - The importer filters label extensions (`.sh` and `.bat`) from executable labels
 - Duplicate detection is based on releaseKey (each releaseKey is processed only once)
 - Games already present in the metadata path are skipped (based on IGDB ID)
-- **Authentication:** The API token is automatically loaded from `METADATA_PATH/tokens.json`. You must login via the web interface first. The token is never read from environment variables or `.env` file for security reasons.
+- **Authentication:** The API token is automatically loaded from `METADATA_PATH/tokens/twitch-oauth-sessions.json`. You must login via the web interface first. The token is never read from environment variables or `.env` file for security reasons.
 
 ## Adding New Importers
 
