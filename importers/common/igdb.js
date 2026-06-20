@@ -380,13 +380,13 @@ export async function updateGameViaAPI(gameId, updates, serverUrl, apiToken) {
 
 /**
  * Create game via API
- * @param {Object} gameData - Game data for POST /games/add-from-igdb
+ * @param {Object} gameData - Game data for POST /igdb/import-game
  * @param {string} serverUrl - MyHomeGames server URL
  * @param {string} apiToken - API token
  * @returns {Promise<Object>} - Created game data
  */
 export async function createGameViaAPI(gameData, serverUrl, apiToken) {
-  const url = `${serverUrl}/games/add-from-igdb`;
+  const url = `${serverUrl}/igdb/import-game`;
   return makeHttpRequest('POST', url, apiToken, gameData);
 }
 
