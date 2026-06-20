@@ -1,6 +1,6 @@
 {
   "role": "importer",
   "requires": {
-    "minServerVersion": "0.1.3"
+    "minServerVersion": "1.1.2"
   }
 }
