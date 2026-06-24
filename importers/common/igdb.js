@@ -413,6 +413,20 @@ function pickCompanyProfileFromApi(raw) {
   return Object.keys(profile).length > 0 ? profile : null;
 }
 
+const COMPANY_MERGE_STORAGE_KEYS = ['title', 'summary', 'externalCoverUrl', 'externalBackgroundUrl'];
+
+function pickCompanyMergePayloadFromApi(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const profile = pickCompanyProfileFromApi(raw);
+  const payload = { ...(profile || {}) };
+  for (const key of COMPANY_MERGE_STORAGE_KEYS) {
+    if (raw[key] !== undefined && typeof raw[key] === 'string') {
+      payload[key] = raw[key];
+    }
+  }
+  return Object.keys(payload).length > 0 ? payload : null;
+}
+
 async function getCompanyProfileFromServer(companyId, serverUrl, apiToken, twitchClientId, twitchClientSecret, name) {
   const url = new URL(`${serverUrl}/igdb/company/${companyId}`);
   if (name) url.searchParams.set('name', String(name).trim());
@@ -449,9 +463,34 @@ export async function syncCompanyProfilesAfterGameImport(
           twitchClientSecret,
           item.name,
         );
-        const profile = pickCompanyProfileFromApi(raw);
+        const profile = pickCompanyMergePayloadFromApi(raw);
         if (profile) {
           await mergeCompanyProfileViaAPI(resourceType, item.id, profile, serverUrl, apiToken);
+          const parent = profile.parentCompany;
+          if (parent?.id != null) {
+            try {
+              const parentRaw = await getCompanyProfileFromServer(
+                parent.id,
+                serverUrl,
+                apiToken,
+                twitchClientId,
+                twitchClientSecret,
+                parent.name,
+              );
+              const parentProfile = pickCompanyMergePayloadFromApi(parentRaw);
+              if (parentProfile) {
+                await mergeCompanyProfileViaAPI(
+                  resourceType,
+                  parent.id,
+                  parentProfile,
+                  serverUrl,
+                  apiToken,
+                );
+              }
+            } catch {
+              /* best effort */
+            }
+          }
         }
       } catch {
         /* best effort */
