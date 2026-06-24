@@ -380,14 +380,87 @@ export async function updateGameViaAPI(gameId, updates, serverUrl, apiToken) {
 
 /**
  * Create game via API
- * @param {Object} gameData - Game data for POST /igdb/import-game
+ * @param {Object} gameData - Game data for POST /catalog/import-game
  * @param {string} serverUrl - MyHomeGames server URL
  * @param {string} apiToken - API token
  * @returns {Promise<Object>} - Created game data
  */
 export async function createGameViaAPI(gameData, serverUrl, apiToken) {
-  const url = `${serverUrl}/igdb/import-game`;
+  const url = `${serverUrl}/catalog/import-game`;
   return makeHttpRequest('POST', url, apiToken, gameData);
+}
+
+const COMPANY_PROFILE_FIELD_KEYS = [
+  'status',
+  'countryCode',
+  'started',
+  'changedOn',
+  'knownAs',
+  'legalName',
+  'companySize',
+  'companySizeId',
+  'formerly',
+  'parentCompany',
+  'updatedTo',
+];
+
+function pickCompanyProfileFromApi(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const profile = {};
+  for (const key of COMPANY_PROFILE_FIELD_KEYS) {
+    if (raw[key] !== undefined) profile[key] = raw[key];
+  }
+  return Object.keys(profile).length > 0 ? profile : null;
+}
+
+async function getCompanyProfileFromServer(companyId, serverUrl, apiToken, twitchClientId, twitchClientSecret, name) {
+  const url = new URL(`${serverUrl}/igdb/company/${companyId}`);
+  if (name) url.searchParams.set('name', String(name).trim());
+  if (twitchClientId) url.searchParams.set('clientId', twitchClientId);
+  if (twitchClientSecret) url.searchParams.set('clientSecret', twitchClientSecret);
+  return makeHttpRequest('GET', url.toString(), apiToken);
+}
+
+async function mergeCompanyProfileViaAPI(resourceType, companyId, profile, serverUrl, apiToken) {
+  const url = `${serverUrl}/${resourceType}/${companyId}/merge-company-profile`;
+  return makeHttpRequest('POST', url, apiToken, profile);
+}
+
+/**
+ * Sync developer/publisher profiles via /igdb/company after catalog game import.
+ */
+export async function syncCompanyProfilesAfterGameImport(
+  gameData,
+  serverUrl,
+  apiToken,
+  twitchClientId,
+  twitchClientSecret,
+) {
+  const syncRole = async (resourceType, items) => {
+    if (!items || !Array.isArray(items)) return;
+    for (const item of items) {
+      if (!item?.id) continue;
+      try {
+        const raw = await getCompanyProfileFromServer(
+          item.id,
+          serverUrl,
+          apiToken,
+          twitchClientId,
+          twitchClientSecret,
+          item.name,
+        );
+        const profile = pickCompanyProfileFromApi(raw);
+        if (profile) {
+          await mergeCompanyProfileViaAPI(resourceType, item.id, profile, serverUrl, apiToken);
+        }
+      } catch {
+        /* best effort */
+      }
+    }
+  };
+
+  await syncRole('developers', gameData.developers);
+  await syncRole('publishers', gameData.publishers);
 }
 
 /**

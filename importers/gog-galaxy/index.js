@@ -4,7 +4,7 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
-import { searchGameOnServer, getGameDetailsFromServer, createGameViaAPI, getGameViaAPI, updateGameViaAPI, uploadExecutableViaAPI, uploadCoverViaAPI, uploadBackgroundViaAPI, createCollectionViaAPI, updateCollectionGamesViaAPI, getCollectionsViaAPI, getExistingGameIds } from '../common/igdb.js';
+import { searchGameOnServer, getGameDetailsFromServer, createGameViaAPI, syncCompanyProfilesAfterGameImport, getGameViaAPI, updateGameViaAPI, uploadExecutableViaAPI, uploadCoverViaAPI, uploadBackgroundViaAPI, createCollectionViaAPI, updateCollectionGamesViaAPI, getCollectionsViaAPI, getExistingGameIds } from '../common/igdb.js';
 import * as reportLogger from '../common/reportLogger.js';
 
 /**
@@ -404,6 +404,19 @@ async function importGame(gameTitles, releaseKey, executables, metadataPath, gal
     try {
       await createGameViaAPI(gameData, serverUrl, apiToken);
       reportLogger.log(`  Created game via API`);
+      if (twitchClientId && twitchClientSecret) {
+        try {
+          await syncCompanyProfilesAfterGameImport(
+            gameData,
+            serverUrl,
+            apiToken,
+            twitchClientId,
+            twitchClientSecret,
+          );
+        } catch (error) {
+          reportLogger.warn(`  Warning: company profile sync skipped: ${error.message}`);
+        }
+      }
     } catch (error) {
       // If game already exists (409), that's fine, continue
       if (error.message.includes('409') || error.message.includes('already exists')) {
