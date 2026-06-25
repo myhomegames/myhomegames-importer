@@ -400,7 +400,6 @@ const COMPANY_PROFILE_FIELD_KEYS = [
   'companySize',
   'companySizeId',
   'formerly',
-  'parentCompany',
   'updatedTo',
 ];
 
@@ -464,9 +463,14 @@ export async function syncCompanyProfilesAfterGameImport(
           item.name,
         );
         const profile = pickCompanyMergePayloadFromApi(raw);
-        if (profile) {
-          await mergeCompanyProfileViaAPI(resourceType, item.id, profile, serverUrl, apiToken);
-          const parent = profile.parentCompany;
+        const hasParentHint = raw?.parentCompany?.id != null;
+        if (profile || hasParentHint) {
+          const mergeBody = { ...(profile || {}) };
+          if (hasParentHint) {
+            mergeBody.parentCompany = raw.parentCompany;
+          }
+          await mergeCompanyProfileViaAPI(resourceType, item.id, mergeBody, serverUrl, apiToken);
+          const parent = raw?.parentCompany;
           if (parent?.id != null) {
             try {
               const parentRaw = await getCompanyProfileFromServer(
@@ -478,11 +482,15 @@ export async function syncCompanyProfilesAfterGameImport(
                 parent.name,
               );
               const parentProfile = pickCompanyMergePayloadFromApi(parentRaw);
-              if (parentProfile) {
+              if (parentProfile || parentRaw?.title) {
+                const parentMergeBody = { ...(parentProfile || {}) };
+                if (!parentMergeBody.title && typeof parentRaw?.title === 'string' && parentRaw.title.trim()) {
+                  parentMergeBody.title = parentRaw.title.trim();
+                }
                 await mergeCompanyProfileViaAPI(
                   resourceType,
                   parent.id,
-                  parentProfile,
+                  parentMergeBody,
                   serverUrl,
                   apiToken,
                 );
