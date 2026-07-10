@@ -449,60 +449,50 @@ export async function syncCompanyProfilesAfterGameImport(
   twitchClientId,
   twitchClientSecret,
 ) {
+  const visited = new Set();
+
+  const syncSingleCompany = async (resourceType, item) => {
+    if (!item?.id) return;
+    const companyId = Number(item.id);
+    if (!Number.isFinite(companyId) || visited.has(companyId)) return;
+    visited.add(companyId);
+
+    try {
+      const raw = await getCompanyProfileFromServer(
+        companyId,
+        serverUrl,
+        apiToken,
+        twitchClientId,
+        twitchClientSecret,
+        item.name,
+      );
+      const profile = pickCompanyMergePayloadFromApi(raw);
+      const hasRelationHint =
+        raw?.parentCompany?.id != null ||
+        raw?.updatedTo?.id != null ||
+        raw?.formerly?.id != null;
+      if (!profile && !hasRelationHint) return;
+
+      const mergeBody = { ...(profile || {}) };
+      if (raw?.parentCompany?.id != null) {
+        mergeBody.parentCompany = raw.parentCompany;
+      }
+      await mergeCompanyProfileViaAPI(resourceType, companyId, mergeBody, serverUrl, apiToken);
+
+      for (const ref of [raw?.parentCompany, raw?.updatedTo, raw?.formerly]) {
+        if (ref?.id != null && Number(ref.id) !== companyId) {
+          await syncSingleCompany(resourceType, ref);
+        }
+      }
+    } catch {
+      /* best effort */
+    }
+  };
+
   const syncRole = async (resourceType, items) => {
     if (!items || !Array.isArray(items)) return;
     for (const item of items) {
-      if (!item?.id) continue;
-      try {
-        const raw = await getCompanyProfileFromServer(
-          item.id,
-          serverUrl,
-          apiToken,
-          twitchClientId,
-          twitchClientSecret,
-          item.name,
-        );
-        const profile = pickCompanyMergePayloadFromApi(raw);
-        const hasParentHint = raw?.parentCompany?.id != null;
-        if (profile || hasParentHint) {
-          const mergeBody = { ...(profile || {}) };
-          if (hasParentHint) {
-            mergeBody.parentCompany = raw.parentCompany;
-          }
-          await mergeCompanyProfileViaAPI(resourceType, item.id, mergeBody, serverUrl, apiToken);
-          const parent = raw?.parentCompany;
-          if (parent?.id != null) {
-            try {
-              const parentRaw = await getCompanyProfileFromServer(
-                parent.id,
-                serverUrl,
-                apiToken,
-                twitchClientId,
-                twitchClientSecret,
-                parent.name,
-              );
-              const parentProfile = pickCompanyMergePayloadFromApi(parentRaw);
-              if (parentProfile || parentRaw?.title) {
-                const parentMergeBody = { ...(parentProfile || {}) };
-                if (!parentMergeBody.title && typeof parentRaw?.title === 'string' && parentRaw.title.trim()) {
-                  parentMergeBody.title = parentRaw.title.trim();
-                }
-                await mergeCompanyProfileViaAPI(
-                  resourceType,
-                  parent.id,
-                  parentMergeBody,
-                  serverUrl,
-                  apiToken,
-                );
-              }
-            } catch {
-              /* best effort */
-            }
-          }
-        }
-      } catch {
-        /* best effort */
-      }
+      await syncSingleCompany(resourceType, item);
     }
   };
 
